@@ -211,7 +211,14 @@ def _build_enhanced_memory_prompt(
     sim_thr: float
 ) -> str:
     """
-    改进版 prompt - 学习baseline成功模式（单行代码版本）
+    COMPLETE FIX - 学习baseline真正的成功模式
+    
+    关键修复：
+    1. 统一使用 data.get('field', 0) 格式
+    2. 强调复杂性（3-4个字段组合）
+    3. 禁止 /(1+abs()) 因为会弱化信号
+    4. 强化时序特征使用（30-50%）
+    5. 给出具体的金融比率示例
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
@@ -257,82 +264,123 @@ def _build_enhanced_memory_prompt(
     return f"""
 You are designing quantitative equity factor formulas for VALIDATION period (2009-2014).
 
-**TOP PERFORMING FACTORS (learn their patterns):**
+**TOP PERFORMING FACTORS (learn their SUCCESS PATTERNS):**
 {pos_block}
 
 **FAILED FACTORS (avoid their mistakes):**
 {neg_block}
 
-**SUCCESS PATTERNS from best factors:**
+**CRITICAL SUCCESS PATTERNS - Learn from best factors above:**
 
-1. **Conditional Protection + Error Handling:**
-   Best practice - combine both in ONE line:
-     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq']).fillna(0)
+1. **COMPLEX FINANCIAL RATIOS** (Most Important!):
+   Best factors combine MULTIPLE fields meaningfully:
    
-   Alternative - simpler division with fillna:
-     data['factor_score'] = (data['ibq'] / data['atq']).fillna(0)
-
-2. **Time-Series Features (HIGH VALUE - use in 30-50% of factors):**
-   Year-over-year change:
-     data['factor_score'] = (data['epsfiq']/data['prccq']).pct_change(4, fill_method=None).fillna(0)
+   Example 1 - Net profitability margin:
+     data['factor_score'] = np.where(data.get('revtq',0)==0, 0, (data.get('niq',0) - data.get('txpq',0)) / data.get('revtq',0)).fillna(0)
    
-   Rolling with shift:
-     data['factor_score'] = data['saleq'].rolling(4).mean().shift(1).fillna(0)
+   Example 2 - Current ratio (liquidity):
+     data['factor_score'] = np.where(data.get('lctq',0)==0, 0, (data.get('cheq',0) + data.get('rectq',0)) / data.get('lctq',0)).fillna(0)
+   
+   Example 3 - Operating margin efficiency:
+     data['factor_score'] = np.where(data.get('atq',0)==0, 0, (data.get('ibq',0) - data.get('txpq',0)) / data.get('atq',0)).fillna(0)
 
-3. **Financial Ratios (CORE):**
-   - Profitability: (niq - txpq) / revtq, ibq / atq
-   - Liquidity: (cheq + rectq) / lctq
-   - Valuation: epsfiq / prccq
+2. **Time-Series Features** (30-50% of factors MUST use these):
+   
+   Year-over-year growth:
+     data['factor_score'] = (data.get('epsfiq',0) / (data.get('prccq',0) + 1e-8)).pct_change(4, fill_method=None).fillna(0)
+   
+   Trend with rolling average:
+     data['factor_score'] = (data.get('saleq',0) / (data.get('atq',0) + 1e-8)).rolling(4).mean().shift(1).fillna(0)
+   
+   Volatility measure:
+     data['factor_score'] = (data.get('ibq',0) / (data.get('revtq',0) + 1e-8)).rolling(8).std().shift(1).fillna(0)
+
+3. **Division Protection** (MANDATORY for all divisions):
+   
+   Best practice with np.where:
+     np.where(data.get('denom',0)==0, 0, data.get('numer',0) / data.get('denom',0)).fillna(0)
+   
+   Alternative with small constant:
+     (data.get('numer',0) / (data.get('denom',0) + 1e-8)).fillna(0)
+   
+   ⚠️ DON'T USE: data.get('numer',0) / (1 + np.abs(data.get('denom',0)))
+   This weakens signal by ~60% and produces poor results!
 
 **YOUR TASK: Generate {n} HIGH-QUALITY factors**
 
-**KEY GUIDELINES:**
+**STRICT REQUIREMENTS:**
 
-1. **Division Protection (REQUIRED):**
-   - Option A: np.where(denom==0, 0, numer/denom).fillna(0)  [BEST - most robust]
-   - Option B: (numer / denom).fillna(0)  [Good - simpler]
-   - Option C: numer / (1 + np.abs(denom))  [OK - but weakens signal ~60%]
+1. **Complexity** (CRITICAL - Most factors should be complex):
+   ✗ BAD (too simple): 
+     data['factor_score'] = data.get('niq',0) / (data.get('revtq',0) + 1e-8)
+   
+   ✓ GOOD (complex & meaningful):
+     data['factor_score'] = np.where(data.get('revtq',0)==0, 0, (data.get('niq',0) - data.get('txpq',0)) / data.get('revtq',0)).fillna(0)
+   
+   Requirements:
+   - Use 3-4 different fields per factor
+   - Combine fields with economic meaning (subtract costs, add assets, etc.)
+   - Create meaningful financial ratios
 
-2. **Time-Series (STRONGLY ENCOURAGED - 30-50% of factors):**
-   - .pct_change(4, fill_method=None) for YoY changes
+2. **Time-Series** (30-50% of factors MUST include):
+   - .pct_change(4, fill_method=None) for year-over-year growth
    - .rolling(4).mean().shift(1) for moving averages
    - .rolling(8).std().shift(1) for volatility
-   - CRITICAL: Always add .shift(1) after .rolling() to avoid look-ahead
-   - CRITICAL: Always add .fillna(0) at the end of the line
+   - ALWAYS use .shift(1) after .rolling() to prevent look-ahead
+   - ALWAYS end with .fillna(0)
 
-3. **Error Handling (MANDATORY):**
-   - Every line MUST end with .fillna(0)
-   - This prevents NaN/Inf from causing evaluation failures
+3. **Economic Intuition** (Think like a financial analyst):
+   Common meaningful ratios:
+   - Profitability: (Income - Tax) / Revenue
+   - Liquidity: (Cash + Receivables) / Current Liabilities
+   - Efficiency: Operating Income / Total Assets
+   - Leverage: Total Debt / Total Assets
+   - Growth: Current Value / Previous Period Value
 
-4. **Normalization (OPTIONAL):**
-   - .rank(pct=True) for relative ranking
-   - np.tanh() for bounding
-   - WARNING: Don't over-normalize - keep signal strength
+4. **Division Safety** (MANDATORY):
+   Choose ONE:
+   - np.where(denom==0, 0, numer/denom).fillna(0)  [BEST]
+   - (numer / (denom + 1e-8)).fillna(0)  [Good]
+   
+   ⚠️ NEVER use: numer / (1 + np.abs(denom))  [Weakens signal!]
 
-**CRITICAL FORMAT REQUIREMENTS:**
-- SINGLE LINE per factor only
-- End every line with .fillna(0)
-- Example correct format:
-  data['factor_score'] = np.where(data['atq']==0, 0, data['ibq']/data['atq']).fillna(0)
+5. **Format Requirements** (STRICT):
+   - SINGLE line per factor
+   - Use data.get('field', 0) format for ALL field access
+   - End with .fillna(0)
+   - Example: data['factor_score'] = np.where(data.get('atq',0)==0, 0, data.get('ibq',0)/data.get('atq',0)).fillna(0)
 
-**CONSTRAINTS:**
-- Use ONLY data['field'] or data.get('field',0) from: {_FIELDS_FOR_PROMPT}
-- Each factor: 2-4 different fields
-- Keep economically interpretable
+**AVAILABLE FIELDS:**
+{_FIELDS_FOR_PROMPT}
 
-**VALIDATION PERIOD: 2009-2014**
-- Post financial crisis
-- Prefer fundamental ratios over momentum
-- YoY comparisons more robust than QoQ
+**Commonly useful fields:**
+Income: niq (net income), ibq (income before taxes), oiadpq (operating income)
+Revenue: revtq, saleq
+Assets: atq (total assets), actq (current assets), lctq (current liabilities), ltq (total liabilities)
+Cash: cheq (cash), rectq (receivables)
+Other: txpq (taxes), prccq (price), epsfiq (EPS)
 
-**Return {n} factors as JSON (no explanation, no backticks):**
+**VALIDATION CONTEXT: 2009-2014 (Post-Crisis)**
+- Fundamental ratios more reliable than momentum
+- Year-over-year comparisons more robust
+- Focus on profitability, liquidity, and efficiency
+
+**OUTPUT FORMAT - Return exactly {n} factors as JSON:**
 [
-  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, data['ibq']/data['atq']).fillna(0)"}},
-  {{"code": "data['factor_score'] = (data['saleq']/data['atq']).pct_change(4, fill_method=None).fillna(0)"}}
+  {{"code": "data['factor_score'] = np.where(data.get('revtq',0)==0, 0, (data.get('niq',0)-data.get('txpq',0))/data.get('revtq',0)).fillna(0)"}},
+  {{"code": "data['factor_score'] = (data.get('saleq',0)/(data.get('atq',0)+1e-8)).pct_change(4,fill_method=None).fillna(0)"}}
 ]
 
-**DIVERSITY**: Similarity < {sim_thr:.2f}. Vary field combinations, time horizons, transformations.
+**DIVERSITY REQUIREMENT:**
+- Similarity threshold: {sim_thr:.2f}
+- Vary field combinations (don't repeat same pairs)
+- Mix fundamental ratios (70%) with time-series features (30%)
+- Use different denominators and numerators
+- Combine different financial statement items
+
+Remember: Your factors should match the QUALITY and COMPLEXITY of the top-performing factors shown above!
 """.strip()
+    
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
     """带超时的 LLM 调用"""
