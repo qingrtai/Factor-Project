@@ -211,17 +211,16 @@ def _build_enhanced_memory_prompt(
     sim_thr: float
 ) -> str:
     """
-    改进版 prompt - 学习baseline成功模式
+    改进版 prompt - 学习baseline成功模式（单行代码版本）
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
         trn = rec.get("train_score", None)
-        val = rec.get("val_score", None)  # 新增：显示val_score
+        val = rec.get("val_score", None)
         
         ts = "N/A" if trn is None else f"{float(trn):.3f}"
         vs = "N/A" if val is None else f"{float(val):.3f}"
         
-        # 分析特征
         features = []
         if 'np.where' in code:
             features.append("conditional")
@@ -266,19 +265,19 @@ You are designing quantitative equity factor formulas for VALIDATION period (200
 
 **SUCCESS PATTERNS from best factors:**
 
-1. **Conditional Protection (RECOMMENDED):**
-   Example with np.where:
-     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq'] - data['txpq']) / data['revtq'])
-     data['factor_score'] = data['factor_score'].fillna(0)
+1. **Conditional Protection + Error Handling:**
+   Best practice - combine both in ONE line:
+     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq']).fillna(0)
+   
+   Alternative - simpler division with fillna:
+     data['factor_score'] = (data['ibq'] / data['atq']).fillna(0)
 
 2. **Time-Series Features (HIGH VALUE - use in 30-50% of factors):**
    Year-over-year change:
-     data['factor_score'] = (data['epsfiq'] / data['prccq']).pct_change(4, fill_method=None)
-     data['factor_score'] = data['factor_score'].fillna(0)
+     data['factor_score'] = (data['epsfiq']/data['prccq']).pct_change(4, fill_method=None).fillna(0)
    
    Rolling with shift:
-     data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
-     data['factor_score'] = data['factor_score'].fillna(0)
+     data['factor_score'] = data['saleq'].rolling(4).mean().shift(1).fillna(0)
 
 3. **Financial Ratios (CORE):**
    - Profitability: (niq - txpq) / revtq, ibq / atq
@@ -289,26 +288,32 @@ You are designing quantitative equity factor formulas for VALIDATION period (200
 
 **KEY GUIDELINES:**
 
-1. **Division Protection - Choose ONE approach:**
-   - A. np.where(denom==0, 0, numer/denom) + second line .fillna(0) (BEST)
-   - B. numer / denom + second line .fillna(0) (Good, simpler)
-   - C. numer / (1 + np.abs(denom)) (OK, but may weaken signal)
+1. **Division Protection (REQUIRED):**
+   - Option A: np.where(denom==0, 0, numer/denom).fillna(0)  [BEST - most robust]
+   - Option B: (numer / denom).fillna(0)  [Good - simpler]
+   - Option C: numer / (1 + np.abs(denom))  [OK - but weakens signal ~60%]
 
-2. **Time-Series (STRONGLY ENCOURAGED - use in 30-50% of factors):**
-   - .pct_change(4) for YoY changes
+2. **Time-Series (STRONGLY ENCOURAGED - 30-50% of factors):**
+   - .pct_change(4, fill_method=None) for YoY changes
    - .rolling(4).mean().shift(1) for moving averages
    - .rolling(8).std().shift(1) for volatility
-   - CRITICAL: Always .shift(1) after .rolling() to avoid look-ahead
+   - CRITICAL: Always add .shift(1) after .rolling() to avoid look-ahead
+   - CRITICAL: Always add .fillna(0) at the end of the line
 
-3. **Multi-line Code (ALLOWED & ENCOURAGED):**
-   You can use 2 lines (separate with \\n in JSON):
-   - Line 1: Calculate the factor
-   - Line 2: data['factor_score'] = data['factor_score'].fillna(0)
+3. **Error Handling (MANDATORY):**
+   - Every line MUST end with .fillna(0)
+   - This prevents NaN/Inf from causing evaluation failures
 
-4. **Normalization (OPTIONAL, not mandatory):**
+4. **Normalization (OPTIONAL):**
    - .rank(pct=True) for relative ranking
    - np.tanh() for bounding
    - WARNING: Don't over-normalize - keep signal strength
+
+**CRITICAL FORMAT REQUIREMENTS:**
+- SINGLE LINE per factor only
+- End every line with .fillna(0)
+- Example correct format:
+  data['factor_score'] = np.where(data['atq']==0, 0, data['ibq']/data['atq']).fillna(0)
 
 **CONSTRAINTS:**
 - Use ONLY data['field'] or data.get('field',0) from: {_FIELDS_FOR_PROMPT}
@@ -322,13 +327,12 @@ You are designing quantitative equity factor formulas for VALIDATION period (200
 
 **Return {n} factors as JSON (no explanation, no backticks):**
 [
-  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, data['ibq']/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-  {{"code": "data['factor_score'] = (data['saleq']/data['atq']).pct_change(4, fill_method=None)\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, data['ibq']/data['atq']).fillna(0)"}},
+  {{"code": "data['factor_score'] = (data['saleq']/data['atq']).pct_change(4, fill_method=None).fillna(0)"}}
 ]
 
 **DIVERSITY**: Similarity < {sim_thr:.2f}. Vary field combinations, time horizons, transformations.
 """.strip()
-
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
     """带超时的 LLM 调用"""
