@@ -211,29 +211,44 @@ def _build_enhanced_memory_prompt(
     sim_thr: float
 ) -> str:
     """
-    改进版 prompt - 自动分析负样本失败原因
+    改进版 prompt - 学习baseline成功模式
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
-        code = str(rec.get("code", ""))[:230]
+        code = str(rec.get("code", ""))[:300]
         trn = rec.get("train_score", None)
+        val = rec.get("val_score", None)  # 新增：显示val_score
+        
         ts = "N/A" if trn is None else f"{float(trn):.3f}"
-        return f"GOOD#{i}  TrainScore={ts}\n  {code}"
+        vs = "N/A" if val is None else f"{float(val):.3f}"
+        
+        # 分析特征
+        features = []
+        if 'np.where' in code:
+            features.append("conditional")
+        if 'rolling' in code:
+            features.append("rolling")
+        if 'pct_change' in code:
+            features.append("pct_change")
+        if 'fillna' in code:
+            features.append("fillna")
+        
+        feat_str = f" [{', '.join(features)}]" if features else ""
+        
+        return (
+            f"GOOD#{i}  Train={ts}  Val={vs}{feat_str}\n"
+            f"  {code}"
+        )
 
     def _fmt_neg(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:230]
         trn = rec.get("train_score", None)
         ts = "N/A" if trn is None else f"{float(trn):.3f}"
         
-        # ⚠️ 关键改进：自动分析失败原因
         reasons = _analyze_negative_failure_reason(code)
         reason_str = ", ".join(reasons)
         
-        fields = _extract_fields_from_code(code)
-        fields_str = ", ".join(fields[:5]) if fields else "none"
-        
         return (
-            f"BAD#{i}  TrainScore={ts}  [Why failed: {reason_str}]\n"
-            f"  Fields: {fields_str}\n"
+            f"BAD#{i}  Train={ts}  [Why failed: {reason_str}]\n"
             f"  {code}"
         )
 
@@ -241,52 +256,81 @@ def _build_enhanced_memory_prompt(
     neg_block = "\n".join(_fmt_neg(r, i + 1) for i, r in enumerate(negatives[:5])) or "N/A"
 
     return f"""
-You are designing **single-line quantitative equity factor formulas** that are robust on VALIDATION (2001–2010).
+You are designing quantitative equity factor formulas for VALIDATION period (2009-2014).
 
-Context (numbers hidden from you):
-- Train: 1961–2000 → produces train_score (for robustness checks)
-- Validation: 2001–2010 → used for iteration decisions
-- Test: 2011–2025 → holdout
-
-**TOP PERFORMING factors (train_score + code):**
+**TOP PERFORMING FACTORS (learn their patterns):**
 {pos_block}
 
-**FAILED factors with ANALYSIS (learn from their mistakes):**
+**FAILED FACTORS (avoid their mistakes):**
 {neg_block}
 
-**KEY LEARNINGS from failed factors:**
-- "unstable denominator" → Always use `/ (1 + np.abs(x))` or `np.where()`
-- "look-ahead" → Always `.shift(1)` after `.rolling().mean()`
-- "single field only" → Use at least 2-3 different fields
-- "noise amplification" → Avoid squaring/cubing noisy variables
-- "missing normalization" → Use `.rank(pct=True)` or `np.tanh()`
+**SUCCESS PATTERNS from best factors:**
 
-**YOUR TASK: Generate {n} HIGH-QUALITY factors that:**
-1. **AVOID all the failure patterns above**
-2. Use diverse fields and transformations
-3. Are syntactically valid single-line Python
+1. **Conditional Protection (RECOMMENDED):**
+```python
+   # Best: np.where for zero-check + fillna for other issues
+   data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq'] - data['txpq']) / data['revtq'])
+   data['factor_score'] = data['factor_score'].fillna(0)
+```
 
-**CRITICAL CONSTRAINTS:**
-- Return exactly {n} items as pure JSON list (no prose, no backticks)
-- Each item: {{"code": "data['factor_score'] = <expression>"}}
-- **MANDATORY denominator protection**: Use `/ (1 + np.abs(x))` for ALL divisions
-- **NO LOOK-AHEAD**: `.rolling().mean()` MUST be followed by `.shift(1)`
-- **Shift restrictions**: `.shift()` can ONLY be used on pandas Series, NOT after numpy functions
-- Field access: ONLY `data.get('<field>', 0)` from: {_FIELDS_FOR_PROMPT}
-- Allowed transforms: `np.tanh()`, `.rank(pct=True)`, `np.sign()`, `np.sqrt(np.abs())`
-- Each factor should use **at least 2 different fields**
+2. **Time-Series Features (HIGH VALUE):**
+```python
+   # Year-over-year change (for quarterly data)
+   data['factor_score'] = (data['epsfiq'] / data['prccq']).pct_change(4, fill_method=None)
+   data['factor_score'] = data['factor_score'].fillna(0)
+   
+   # Rolling with shift (NO look-ahead)
+   data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
+   data['factor_score'] = data['factor_score'].fillna(0)
+```
 
-**VALIDATION-ROBUSTNESS GUIDELINES:**
-- Prefer ratios over raw differences
-- Use year-over-year anchors (t vs t-4) for quarterly data
-- Keep formulas concise and interpretable
-- Diversity threshold: similarity < {sim_thr:.2f}
+3. **Financial Ratios (CORE):**
+   - Profitability: `(niq - txpq) / revtq`, `ibq / atq`
+   - Liquidity: `(cheq + rectq) / lctq`
+   - Valuation: `epsfiq / prccq`
 
-**Return JSON ONLY (no explanation):**
+**YOUR TASK: Generate {n} HIGH-QUALITY factors**
+
+**KEY GUIDELINES:**
+
+1. **Division Protection - Choose ONE approach:**
+   - A. `np.where(denom==0, 0, numer/denom)` + second line `.fillna(0)` (BEST)
+   - B. `numer / denom` + second line `.fillna(0)` (Good, simpler)
+   - C. `numer / (1 + np.abs(denom))` (OK, but may weaken signal)
+
+2. **Time-Series (STRONGLY ENCOURAGED - use in 30-50% of factors):**
+   - `.pct_change(4)` for YoY changes
+   - `.rolling(4).mean().shift(1)` for moving averages
+   - `.rolling(8).std().shift(1)` for volatility
+   - **CRITICAL**: Always `.shift(1)` after `.rolling()` to avoid look-ahead
+
+3. **Multi-line Code (ALLOWED & ENCOURAGED):**
+   You can use 2 lines:
+   - Line 1: Calculate the factor
+   - Line 2: `data['factor_score'] = data['factor_score'].fillna(0)`
+
+4. **Normalization (OPTIONAL):**
+   - `.rank(pct=True)` - for relative ranking
+   - `np.tanh()` - for bounding
+   - **WARNING**: Don't over-normalize, keep signal strength
+
+**CONSTRAINTS:**
+- Use ONLY `data['field']` or `data.get('field',0)` from: {_FIELDS_FOR_PROMPT}
+- Each factor: 2-4 different fields
+- Keep economically interpretable
+
+**VALIDATION PERIOD: 2009-2014**
+- Post financial crisis
+- Prefer fundamental ratios over momentum
+- YoY comparisons more robust than QoQ
+
+**Return {n} factors as JSON (no explanation, no backticks):**
 [
-  {{"code":"data['factor_score'] = (data.get('atq',0) - data.get('ltq',0)) / (1 + np.abs(data.get('saleq',0)))"}},
-  {{"code":"data['factor_score'] = (data.get('saleq',0) / (1 + np.abs(data.get('atq',0)))).shift(1)"}}
+  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, data['ibq']/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+  {{"code": "data['factor_score'] = (data['saleq']/data['atq']).pct_change(4, fill_method=None)\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
 ]
+
+**DIVERSITY**: Similarity < {sim_thr:.2f}. Vary field combinations, time horizons, transformations.
 """.strip()
 
 
