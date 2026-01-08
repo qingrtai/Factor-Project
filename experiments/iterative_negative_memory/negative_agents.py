@@ -212,11 +212,15 @@ Top-performing factors from previous round (for contrast):
 
 Generate {need} factors that demonstrate **COMMON PITFALLS** (each category below):
 
-**Pitfall Category 1: Unstable Denominators** (MUST include 1-2 factors)
-- Division by variables that can be near-zero WITHOUT proper protection
+**Pitfall Category 1: Missing Conditional Protection** (MUST include 1-2 factors)
+- Division WITHOUT checking if denominator is zero
+- Missing .fillna(0) to handle NaN/Inf
 - Example: `data['factor_score'] = data.get('niq',0) / data.get('ibq',0)`
-  (WRONG - no protection when ibq is near zero)
-- Note: This is a pitfall to demonstrate, not a best practice
+  (BAD - no np.where check, no fillna)
+
+CONTRAST WITH GOOD PRACTICE:
+  data['factor_score'] = np.where(data['ibq']==0, 0, data['niq']/data['ibq'])
+  data['factor_score'] = data['factor_score'].fillna(0)
 
 **Pitfall Category 2: Poor Normalization** (MUST include 1-2 factors)
 - Mixing variables with vastly different scales without normalization
