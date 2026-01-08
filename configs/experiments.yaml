@@ -1,0 +1,11 @@
+factor_baseline:
+  n_factors: 10
+  min_coverage: 0.3
+  sample_rows: 5000            # 生成阶段用于本地快速校验的抽样量
+  max_attempts_per_factor: 5   # 每个因子最多重试
+  correlation_dedup: false     # 是否做相关性去重（默认关，避免误杀）
+
+# 记忆字段不要在代码里硬编码，由各 iterator 的 memory_manager 读取
+memory_fields:
+  non_report: ["code", "train_score"]
+  report:     ["code", "factor_report"]

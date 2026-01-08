@@ -1,0 +1,33 @@
+# ==============================================================================
+# 测试集评估 - 最佳轮次配置
+# ==============================================================================
+# 说明：
+# 1. 每个实验需要指定一个最佳轮次（round）用于测试集评估
+# 2. 轮次从 0 开始计数（round 0 是第一轮）
+# 3. 根据验证集的 val_score 选择得分最高的轮次
+# 4. factor_baseline 只有一轮，固定为 0
+# ==============================================================================
+
+experiments:
+  factor_baseline: 0  # 基线实验固定为第0轮
+  iterative_baseline: 1
+  iterative_global_memory: 1
+  iterative_negative_memory: 2
+  iterative_baseline_with_reports: 2
+  iterative_negative_memory_with_reports: 3
+
+
+# ==============================================================================
+# 如何查找最佳轮次？
+# ==============================================================================
+# 方法1：手动查看 all_rounds_factors.csv
+#   1. 打开 results/{experiment}/all_rounds_factors.csv
+#   2. 按 round 分组，计算每轮的平均 val_score
+#   3. 选择平均 val_score 最高的轮次
+#
+# 方法2：使用 pandas 快速查找（在 Python 中运行）
+#   import pandas as pd
+#   df = pd.read_csv('results/iterative_baseline/all_rounds_factors.csv')
+#   best_round = df.groupby('round')['val_score'].mean().idxmax()
+#   print(f"Best round: {best_round}")
+# ==============================================================================

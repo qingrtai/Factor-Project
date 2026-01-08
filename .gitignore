@@ -1,0 +1,27 @@
+# ---- secrets ----
+.env
+*.env
+
+# ---- data ----
+data/raw/
+data/interim/
+data/processed/
+*.csv
+*.parquet
+*.h5
+
+# ---- logs & outputs ----
+logs/
+outputs/
+results/
+reports/*.pdf
+reports/*.png
+
+# ---- python ----
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# ---- system ----
+.DS_Store
+Thumbs.db

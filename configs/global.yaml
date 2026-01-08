@@ -1,0 +1,18 @@
+data:
+  # 建议用相对路径即可；若在 IDE 子目录运行导致找不到文件，可改为绝对路径
+  # 例：E:/Project/Factor Mining_V/data/raw/financial_data_subset.csv
+  raw_file: data/raw/1961-2025.csv
+
+years:
+  train: [1961, 2000]
+  val:   [2001, 2015]
+  test:  [2016, 2025]
+
+schema:
+  date_col: datadate
+  id_col: gvkey
+  ret_col: ret   # 数据里没有 ret 也没关系，data_loader 会按 ret→retq→prccq 构造
+
+# 季度数据：一年 4 期；若改成月度，这里改为 12，并在调用处传入一致值
+freq_per_year: 4
+

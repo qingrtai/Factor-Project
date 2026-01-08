@@ -1,0 +1,138 @@
+# experiments/iterative_negative_memory/config.py
+"""
+iterative_negative_memory 实验配置
+核心特点：在迭代中加入负向记忆（最差因子）进行对比学习
+"""
+
+from shared.paths import results_dir
+from pathlib import Path
+
+# =============================================================================
+# 实验核心配置
+# =============================================================================
+
+# 迭代轮次
+MAX_ROUNDS = 3                    # 最大迭代轮次
+MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
+FACTORS_PER_ROUND = 10            # 每轮生成因子数
+NEGATIVE_SAMPLES_COUNT = 5        # 每轮生成负样本数
+MAX_GENERATION_ATTEMPTS = 8       # 每轮最大生成尝试次数
+
+# =============================================================================
+# 路径配置
+# =============================================================================
+
+RESULTS_DIR = results_dir("iterative_negative_memory")
+BASELINE_FILE = results_dir("factor_baseline") / "baseline_factor_metrics.csv"
+LOGS_DIR = RESULTS_DIR / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+NEGATIVE_SAMPLES_DIR = RESULTS_DIR / "negative_samples"
+NEGATIVE_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+
+# =============================================================================
+# 记忆配置
+# =============================================================================
+
+MEMORY_SCORE_FIELD = "train_score"
+
+# =============================================================================
+# 负向代理配置
+# =============================================================================
+
+NEGATIVE_AGENT_CONFIG = {
+    "temperature_first": 0.85,
+    "temperature_later": 0.95,
+    "max_calls_per_round": 4,
+    "overask": 3,
+    "min_code_similarity": 0.80,
+    "save_samples": True,
+    "save_format": "json",
+}
+
+# =============================================================================
+# 正向代理配置
+# =============================================================================
+
+POSITIVE_AGENT_CONFIG = {
+    "batch_size": 15,
+    "min_code_similarity": 0.50,
+    "use_negative_memory": True,
+    "negative_weight": 0.3,
+    "max_attempts": 8,  # 新增：与 MAX_GENERATION_ATTEMPTS 同步
+}
+
+# =============================================================================
+# 早停配置
+# =============================================================================
+
+EARLY_STOPPING_PATIENCE = 999
+MIN_DELTA = 0.001
+VAL_SCORE_THRESHOLD = None
+
+# =============================================================================
+# 导出 CONFIG 字典
+# =============================================================================
+
+CONFIG = {
+    # 迭代配置
+    "MAX_ROUNDS": MAX_ROUNDS,
+    "MIN_ROUNDS": MIN_ROUNDS,
+    "FACTORS_PER_ROUND": FACTORS_PER_ROUND,
+    "NEGATIVE_SAMPLES_COUNT": NEGATIVE_SAMPLES_COUNT,
+    "MAX_GENERATION_ATTEMPTS": MAX_GENERATION_ATTEMPTS,
+    
+    # 路径
+    "RESULTS_DIR": RESULTS_DIR,
+    "BASELINE_FILE": BASELINE_FILE,
+    "LOGS_DIR": LOGS_DIR,
+    "NEGATIVE_SAMPLES_DIR": NEGATIVE_SAMPLES_DIR,
+    
+    # 记忆配置
+    "MEMORY_SCORE_FIELD": MEMORY_SCORE_FIELD,
+    
+    # 代理配置
+    "NEGATIVE_AGENT_CONFIG": NEGATIVE_AGENT_CONFIG,
+    "POSITIVE_AGENT_CONFIG": POSITIVE_AGENT_CONFIG,
+    
+    # 早停配置
+    "EARLY_STOPPING_PATIENCE": EARLY_STOPPING_PATIENCE,
+    "MIN_DELTA": MIN_DELTA,
+    "VAL_SCORE_THRESHOLD": VAL_SCORE_THRESHOLD,
+}
+
+# =============================================================================
+# 校验函数
+# =============================================================================
+
+def validate_config():
+    """校验配置"""
+    errors = []
+    warnings = []
+    
+    if not BASELINE_FILE.exists():
+        errors.append(f"Baseline文件不存在: {BASELINE_FILE}")
+    
+    if MAX_ROUNDS <= 0:
+        errors.append("MAX_ROUNDS必须大于0")
+    if FACTORS_PER_ROUND <= 0:
+        errors.append("FACTORS_PER_ROUND必须大于0")
+    if NEGATIVE_SAMPLES_COUNT < 0:
+        errors.append("NEGATIVE_SAMPLES_COUNT不能为负")
+    
+    if NEGATIVE_SAMPLES_COUNT == 0:
+        warnings.append("NEGATIVE_SAMPLES_COUNT为0，将退化为baseline")
+    
+    return errors, warnings
+
+def print_config_summary():
+    """打印配置摘要"""
+    print("=" * 60)
+    print("Iterative Negative Memory 配置摘要")
+    print("=" * 60)
+    print(f"轮数: {MAX_ROUNDS}")
+    print(f"每轮因子数: {FACTORS_PER_ROUND}")
+    print(f"负样本数: {NEGATIVE_SAMPLES_COUNT}")
+    print(f"Baseline: {BASELINE_FILE}")
+    print(f"结果目录: {RESULTS_DIR}")
+    print("=" * 60)

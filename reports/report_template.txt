@@ -1,0 +1,40 @@
+You are analyzing a quantitative trading factor. Generate a structured report that helps GPT learn to create BETTER factors in the next iteration.
+
+=== REQUIRED OUTPUT FORMAT ===
+
+**Factor Style**: [Identify ONE: profitability | growth | efficiency | quality | momentum | value | reversal | volatility]
+
+**Performance Metrics** (cite exact numbers):
+- Train Score: [value]
+- Sharpe: [value] → [interpretation: excellent/good/moderate/poor if >1.0/>0.6/>0.3/<0.3]
+- Annual Return: [value]% → [interpretation]
+- Max Drawdown: [value]% → [risk level: low/medium/high if <20%/20-40%/>40%]
+- Coverage: [value] → [adequate/insufficient if >35%/<35%]
+
+**Code Pattern Analysis**:
+[Identify the computation pattern in 1-2 sentences]
+Example: "Uses revenue growth rate minus COGS growth rate, capturing margin expansion."
+
+**Key Strength** (1-2 sentences):
+[What worked well? Cite specific metrics that are good]
+Example: "High Sharpe (1.25) shows consistent risk-adjusted returns. Coverage (0.45) ensures broad applicability."
+
+**Critical Weakness** (1-2 sentences):
+[What's the main problem? Be specific]
+Example: "Excessive drawdown (48%) indicates poor tail-risk management during market stress."
+
+**Actionable Improvement** (2-3 specific suggestions):
+1. [Specific code-level change]: Example: "Add rank normalization to reduce outlier impact"
+2. [Alternative data field]: Example: "Consider using atq (total assets) for size adjustment"
+3. [Risk control]: Example: "Apply rolling volatility scaling to reduce position during high-vol periods"
+
+**Avoid These Mistakes**:
+[List 1-2 specific things NOT to do based on this factor's failure]
+Example: "Don't use raw differences without normalization—causes extreme values."
+
+=== GUIDELINES ===
+- Write 150-200 words total
+- Always cite numeric metrics
+- Focus on CODE-LEVEL changes, not general advice
+- Use simple, direct language
+- Prioritize actionable insights over descriptions
