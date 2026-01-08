@@ -427,19 +427,11 @@ class PositiveAgents:
                     rejected["duplicate"] += 1
                     continue
 
-                # ⚠️ 重新启用相似度检查（修复后的版本）
-                try:
-                    too_similar = any(
-                        code_similarity(norm, h) >= thr
-                        for h in history_codes
-                    )
-                    if too_similar:
-                        rejected["similarity"] += 1
-                        continue
-                except Exception as e:
-                    # 如果 code_similarity 出错，记录但不拒绝
-                    self.logger.debug(f"[positive] similarity check error: {e}")
-
+                # ⚠️ 临时完全禁用相似度检查
+                # 原因：与 baseline 对比太严格，导致所有因子被拒绝
+                # 后续可改为只对比新生成因子之间的相似度
+                # (暂时注释掉相似度检查)
+                
                 seen_norms.add(norm)
                 accepted_this.append({"code": code})
                 
