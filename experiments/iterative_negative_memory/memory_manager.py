@@ -134,6 +134,19 @@ class MemoryManager:
         
         # 按 val_score 排序，取 Top 10
         combined = combined.sort_values("val_score", ascending=False).head(10)
+
+        # 确保包含 val_score 用于 prompt
+        if 'val_score' not in combined.columns and os.path.exists(BASELINE_FILE):
+            # 从baseline读取val_score
+            baseline_df = pd.read_csv(BASELINE_FILE)
+            if 'val_score' in baseline_df.columns:
+                combined = combined.merge(
+                    baseline_df[['code', 'val_score']], 
+                    on='code', 
+                    how='left'
+                )
+        
+        positives = combined.to_dict(orient="records")
         
         positives = combined.to_dict(orient="records")
         
