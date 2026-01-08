@@ -267,55 +267,51 @@ You are designing quantitative equity factor formulas for VALIDATION period (200
 **SUCCESS PATTERNS from best factors:**
 
 1. **Conditional Protection (RECOMMENDED):**
-```python
-   # Best: np.where for zero-check + fillna for other issues
-   data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq'] - data['txpq']) / data['revtq'])
-   data['factor_score'] = data['factor_score'].fillna(0)
-```
+   Example with np.where:
+     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq'] - data['txpq']) / data['revtq'])
+     data['factor_score'] = data['factor_score'].fillna(0)
 
-2. **Time-Series Features (HIGH VALUE):**
-```python
-   # Year-over-year change (for quarterly data)
-   data['factor_score'] = (data['epsfiq'] / data['prccq']).pct_change(4, fill_method=None)
-   data['factor_score'] = data['factor_score'].fillna(0)
+2. **Time-Series Features (HIGH VALUE - use in 30-50% of factors):**
+   Year-over-year change:
+     data['factor_score'] = (data['epsfiq'] / data['prccq']).pct_change(4, fill_method=None)
+     data['factor_score'] = data['factor_score'].fillna(0)
    
-   # Rolling with shift (NO look-ahead)
-   data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
-   data['factor_score'] = data['factor_score'].fillna(0)
-```
+   Rolling with shift:
+     data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
+     data['factor_score'] = data['factor_score'].fillna(0)
 
 3. **Financial Ratios (CORE):**
-   - Profitability: `(niq - txpq) / revtq`, `ibq / atq`
-   - Liquidity: `(cheq + rectq) / lctq`
-   - Valuation: `epsfiq / prccq`
+   - Profitability: (niq - txpq) / revtq, ibq / atq
+   - Liquidity: (cheq + rectq) / lctq
+   - Valuation: epsfiq / prccq
 
 **YOUR TASK: Generate {n} HIGH-QUALITY factors**
 
 **KEY GUIDELINES:**
 
 1. **Division Protection - Choose ONE approach:**
-   - A. `np.where(denom==0, 0, numer/denom)` + second line `.fillna(0)` (BEST)
-   - B. `numer / denom` + second line `.fillna(0)` (Good, simpler)
-   - C. `numer / (1 + np.abs(denom))` (OK, but may weaken signal)
+   - A. np.where(denom==0, 0, numer/denom) + second line .fillna(0) (BEST)
+   - B. numer / denom + second line .fillna(0) (Good, simpler)
+   - C. numer / (1 + np.abs(denom)) (OK, but may weaken signal)
 
 2. **Time-Series (STRONGLY ENCOURAGED - use in 30-50% of factors):**
-   - `.pct_change(4)` for YoY changes
-   - `.rolling(4).mean().shift(1)` for moving averages
-   - `.rolling(8).std().shift(1)` for volatility
-   - **CRITICAL**: Always `.shift(1)` after `.rolling()` to avoid look-ahead
+   - .pct_change(4) for YoY changes
+   - .rolling(4).mean().shift(1) for moving averages
+   - .rolling(8).std().shift(1) for volatility
+   - CRITICAL: Always .shift(1) after .rolling() to avoid look-ahead
 
 3. **Multi-line Code (ALLOWED & ENCOURAGED):**
-   You can use 2 lines:
+   You can use 2 lines (separate with \\n in JSON):
    - Line 1: Calculate the factor
-   - Line 2: `data['factor_score'] = data['factor_score'].fillna(0)`
+   - Line 2: data['factor_score'] = data['factor_score'].fillna(0)
 
-4. **Normalization (OPTIONAL):**
-   - `.rank(pct=True)` - for relative ranking
-   - `np.tanh()` - for bounding
-   - **WARNING**: Don't over-normalize, keep signal strength
+4. **Normalization (OPTIONAL, not mandatory):**
+   - .rank(pct=True) for relative ranking
+   - np.tanh() for bounding
+   - WARNING: Don't over-normalize - keep signal strength
 
 **CONSTRAINTS:**
-- Use ONLY `data['field']` or `data.get('field',0)` from: {_FIELDS_FOR_PROMPT}
+- Use ONLY data['field'] or data.get('field',0) from: {_FIELDS_FOR_PROMPT}
 - Each factor: 2-4 different fields
 - Keep economically interpretable
 
