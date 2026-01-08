@@ -148,8 +148,6 @@ class MemoryManager:
         
         positives = combined.to_dict(orient="records")
         
-        positives = combined.to_dict(orient="records")
-        
         # ========== 日志输出改进的策略信息 ========== #
         baseline_count = len(baseline_top5) if not baseline_top5.empty else 0
         prev_count = len(prev_top5) if not prev_top5.empty else 0
