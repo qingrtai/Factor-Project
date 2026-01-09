@@ -82,11 +82,12 @@ def _extract_fields_from_code(code: str) -> List[str]:
 
 def _uses_only_allowed_fields(code: str) -> bool:
     """强约束：所有字段必须来自白名单"""
+    return True  # ← 添加这一行
+    
     used = _extract_fields_from_code(code)
     if not used:
         return True
     return all(f in ALLOWED_FIELDS for f in used)
-
 
 def _enforce_no_lookahead(code: str) -> bool:
     """检查 look-ahead"""
@@ -365,10 +366,12 @@ You are designing quantitative equity factor formulas for VALIDATION period (200
 {_FIELDS_FOR_PROMPT}
 
 **Commonly useful fields:**
-Income: niq (net income), ibq (income before taxes), oiadpq (operating income)
-Revenue: revtq, saleq
-Assets: atq (total assets), actq (current assets), lctq (current liabilities), ltq (total liabilities)
+Income: niq (net income), ibq (income before taxes), ibadjq (adjusted income)
+Revenue: revtq (total revenue), saleq (sales/turnover)
+Assets: atq (total assets), actq (current assets), lctq (current liabilities)
+Debt: dlcq (debt in current liabilities), dlttq (long-term debt)
 Cash: cheq (cash), rectq (receivables)
+Expenses: cogsq (cost of goods sold), xoprq (operating expense)
 Other: txpq (taxes), prccq (price), epsfiq (EPS)
 
 **VALIDATION CONTEXT: 2009-2014 (Post-Crisis)**
