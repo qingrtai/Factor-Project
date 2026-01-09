@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 # experiments/iterative_negative_memory/positive_agents.py
 """
-FIXED VERSION - 简化 Prompt + 强制 baseline 模式
+FIXED VERSION V3 - 强制 np.where，禁止 (denom + 1e-8)
 
 核心改动：
-1. 删除冗长的 rolling/pct_change 示例（它们误导了 GPT）
-2. 强制要求 70% 因子使用 np.where（baseline 的核心模式）
-3. 简化 Prompt 到 150 行
-4. 只展示 baseline 的成功因子
-5. 明确指令："模仿 baseline，改变字段组合"
+1. 完全删除 (denom + 1e-8) 的示例
+2. 100% 强制使用 np.where（不是 70%）
+3. 在代码验证前就检查 np.where
+4. 如果没有 np.where 直接拒绝
 """
 
 from typing import List, Dict, Any, Tuple, Optional
@@ -23,7 +22,6 @@ import numpy as np
 from shared.code_utils import (
     normalize_code,
     code_similarity,
-    validate_and_fix_code
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +50,7 @@ except Exception:
 
 POS_CFG = CONFIG.get("POSITIVE_AGENT_CONFIG", {}) or {}
 TIMEOUT_S = int(CONFIG.get("TIMEOUT", 90))
-GPT_TEMP_DEFAULT = float(CONFIG.get("GPT_TEMPERATURE", 0.50))  # 降低到 0.50
+GPT_TEMP_DEFAULT = float(CONFIG.get("GPT_TEMPERATURE", 0.40))  # 进一步降低到 0.40
 GPT_MAX_TOKENS = int(CONFIG.get("GPT_MAX_TOKENS", 2200))
 MAX_RETRIES = int(CONFIG.get("MAX_RETRIES", 6)) or 6
 
@@ -60,30 +58,74 @@ BASE_MIN_SIM = float(POS_CFG.get("min_code_similarity", 0.70))
 BATCH_SIZE = int(POS_CFG.get("batch_size", 10))
 
 
-def _extract_fields_from_code(code: str) -> List[str]:
-    """提取代码中使用的字段"""
-    fields = []
+def _must_have_np_where(code: str) -> bool:
+    """
+    强制检查：代码必须包含 np.where
     
-    # 格式1: data.get('field', 0)
-    fields.extend(re.findall(r"data\.get\(\s*['\"]([^'\"]+)['\"]\s*,", code))
-    
-    # 格式2: data['field']
-    fields.extend(re.findall(r"data\[['\"]([^'\"]+)['\"]\]", code))
-    
-    # 过滤：只保留白名单中的输入字段
-    whitelist = set(ALLOWED_FIELDS)
-    used_fields = []
-    for field in fields:
-        field_clean = field.strip()
-        if field_clean in whitelist and field_clean not in used_fields:
-            used_fields.append(field_clean)
-    
-    return used_fields
+    这是最关键的检查，在所有其他检查之前
+    """
+    return 'np.where' in code
 
 
-def _uses_only_allowed_fields(code: str) -> bool:
-    """强约束：所有字段必须来自白名单"""
+def _validate_two_line_format(code: str) -> bool:
+    """
+    验证是否为正确的两行格式
+    
+    正确格式：
+    data['factor_score'] = np.where(...)
+    data['factor_score'] = data['factor_score'].fillna(0)
+    """
+    lines = code.strip().split('\n')
+    
+    if len(lines) != 2:
+        return False
+    
+    line1 = lines[0].strip()
+    line2 = lines[1].strip()
+    
+    # 第一行必须有 np.where
+    if 'np.where' not in line1:
+        return False
+    
+    # 第二行必须有 fillna
+    if 'fillna' not in line2:
+        return False
+    
     return True
+
+
+def _simple_validate(code: str) -> Optional[str]:
+    """
+    简化的代码验证（绕过 validate_and_fix_code）
+    
+    只做基本检查：
+    1. 必须有 np.where
+    2. 必须是两行格式
+    3. 第一行赋值，第二行 fillna
+    """
+    if not code:
+        return None
+    
+    # 强制检查 np.where
+    if not _must_have_np_where(code):
+        return None
+    
+    # 检查两行格式
+    if not _validate_two_line_format(code):
+        return None
+    
+    # 基本语法检查
+    if "data['factor_score']" not in code:
+        return None
+    
+    # 检查是否有明显的语法错误
+    if code.count('(') != code.count(')'):
+        return None
+    
+    if code.count('[') != code.count(']'):
+        return None
+    
+    return code
 
 
 def _enforce_no_lookahead(code: str) -> bool:
@@ -109,32 +151,6 @@ def _enforce_no_lookahead(code: str) -> bool:
             return False
 
     return True
-
-
-def _has_baseline_pattern(code: str) -> bool:
-    """
-    检查因子是否使用了 baseline 的核心模式
-    
-    Baseline 的核心特征：
-    1. 使用 np.where 或其他分母保护
-    2. 有除法运算
-    3. 有 fillna
-    """
-    # 分母保护
-    has_protection = (
-        'np.where' in code or 
-        '(1+' in code or 
-        '1e-8' in code or
-        '+ 1' in code
-    )
-    
-    # 除法运算
-    has_division = '/' in code
-    
-    # NaN 处理
-    has_fillna = 'fillna' in code
-    
-    return has_protection and has_division and has_fillna
 
 
 def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
@@ -199,20 +215,14 @@ def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _build_simplified_prompt(
+def _build_ultra_strict_prompt(
     positives: List[Dict[str, Any]],
     negatives: List[Dict[str, Any]],
     n: int,
     round_id: int,
 ) -> str:
     """
-    简化版 Prompt - 只展示 baseline 模式，强制 GPT 模仿
-    
-    核心原则：
-    1. 只展示 baseline 的成功因子（都使用 np.where）
-    2. 明确要求模仿这个模式
-    3. 删除所有 rolling/pct_change 示例
-    4. 简洁明了，150 行以内
+    超严格版 Prompt - 100% 强制 np.where，禁止 (denom + 1e-8)
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
@@ -223,101 +233,103 @@ def _build_simplified_prompt(
         vs = "N/A" if val is None else f"{float(val):.4f}"
         
         return (
-            f"Top#{i}  Train={ts}  Val={vs}\n"
-            f"  {code}\n"
+            f"#{i}  Train={ts}  Val={vs}\n"
+            f"{code}\n"
         )
 
     # 只展示前 5 个最好的因子
     pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:5])) or "N/A"
 
-    return f"""You are a quantitative researcher generating factor formulas for validation period (2009-2014).
+    return f"""You are generating factor formulas. Follow these examples EXACTLY:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  CRITICAL: LEARN FROM THESE TOP PERFORMING FACTORS  ⚠️
+TOP PERFORMING FACTORS (COPY THEIR STRUCTURE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {pos_block}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**KEY OBSERVATIONS FROM TOP FACTORS:**
+EVERY factor MUST follow this EXACT 2-line structure:
 
-1. **ALL use np.where() for denominator protection** ✅
-   Structure: np.where(data['denom']==0, 0, numerator/denominator)
-   
-2. **ALL use 2-3 meaningful financial fields** ✅
-   Common patterns:
-   - Profitability: (niq - txpq) / revtq
-   - Efficiency: ibq / saleq
-   - Liquidity: (cheq + rectq) / lctq
-   
-3. **ALL use two-line format** ✅
-   Line 1: data['factor_score'] = np.where(...)
-   Line 2: data['factor_score'] = data['factor_score'].fillna(0)
+Line 1: data['factor_score'] = np.where(data['DENOM']==0, 0, EXPRESSION/data['DENOM'])
+Line 2: data['factor_score'] = data['factor_score'].fillna(0)
+
+Where:
+- DENOM = denominator field (revtq, saleq, atq, etc.)
+- EXPRESSION = numerator (can be: single field, sum, difference, etc.)
+
+EXAMPLES OF VALID VARIATIONS:
+
+Example 1 (difference in numerator):
+data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])
+data['factor_score'] = data['factor_score'].fillna(0)
+
+Example 2 (sum in numerator):
+data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])
+data['factor_score'] = data['factor_score'].fillna(0)
+
+Example 3 (single field in numerator):
+data['factor_score'] = np.where(data['saleq']==0, 0, data['ibq']/data['saleq'])
+data['factor_score'] = data['factor_score'].fillna(0)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ ABSOLUTELY FORBIDDEN (WILL BE REJECTED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. ONE-LINE formats like:
+   data['factor_score'] = (data['niq']-data['txpq']) / (data['revtq'] + 1e-8)
+   ❌ WRONG - missing np.where, missing second line
+
+2. Using (denom + 1e-8) instead of np.where:
+   data['factor_score'] = EXPRESSION / (data['DENOM'] + 1e-8)
+   ❌ WRONG - must use np.where
+
+3. Any format without np.where:
+   ❌ REJECTED IMMEDIATELY
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📋 YOUR TASK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Generate {n} NEW factors following the EXACT SAME PATTERN as above.
+Generate {n} factors using the MANDATORY 2-line np.where structure above.
 
-**REQUIREMENTS:**
+REQUIREMENTS:
 
-1. **MANDATORY: At least {int(n * 0.7)} out of {n} factors MUST use np.where()**
-   - This is the most important success pattern
-   - Use the exact two-line structure shown above
+1. **Structure** (100% compliance):
+   - Line 1: MUST start with "data['factor_score'] = np.where("
+   - Line 2: MUST be "data['factor_score'] = data['factor_score'].fillna(0)"
    
-2. **Field selection:**
-   - Use 2-3 different fields per factor
-   - Available fields: {_FIELDS_FOR_PROMPT}
-   - Common useful fields: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq, epsfiq, prccq
+2. **Fields**:
+   - Available: {_FIELDS_FOR_PROMPT}
+   - Use 2-3 fields per factor
+   - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
    
-3. **Pattern variations allowed:**
-   - Change field combinations (e.g., niq/revtq → ibq/saleq)
-   - Add/subtract terms in numerator (e.g., niq - txpq)
-   - Use different denominators (revtq, saleq, atq, etc.)
-   
-4. **Pattern variations NOT allowed:**
-   - Don't use .rolling() unless specifically needed
-   - Don't use .pct_change() unless specifically needed
-   - DON'T abandon the np.where() structure
+3. **Variations** (change these, keep structure):
+   - Numerator: can be niq-txpq, ibq+cogsq, single field, etc.
+   - Denominator: revtq, saleq, atq, lctq, etc.
+   - Fields: use different combinations
 
-**EXAMPLE GENERATION PROCESS:**
-
-Starting from: (niq - txpq) / revtq
-
-Variation 1: Change fields
-  → (ibq - txpq) / saleq
-
-Variation 2: Change numerator
-  → (revtq - cogsq) / atq
-
-Variation 3: Change both
-  → (epsfiq * prccq) / (cheq + rectq)
+4. **Format** (CRITICAL):
+   - Use \\n to separate two lines in JSON
+   - Use data['field'] format (NOT data.get)
+   - No markdown, no explanations, just JSON
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  OUTPUT FORMAT (STRICT JSON)  ⚠️
+⚠️  OUTPUT FORMAT (JSON ONLY)  ⚠️
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Return EXACTLY {n} factors in pure JSON format:
 
 [
   {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, (data['ibq']-data['txpq'])/data['saleq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, (data['revtq']-data['cogsq'])/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-  {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, (data['actq']-data['invtq'])/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, (data['revtq']+data['niq'])/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+  {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, data['cheq']/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
 ]
 
-**CRITICAL FORMAT RULES:**
+Start output with '[' immediately. No explanations. Exactly {n} factors.
 
-1. Use data['field'] format (NOT data.get('field', 0))
-2. For np.where factors: use \\n between two lines (e.g., "line1\\nline2")
-3. For simple factors: ONE line with (denom + 1e-8) protection
-4. Start response with '[' and end with ']'
-5. NO explanations, NO markdown fences, NO extra text
-
-**REMEMBER:** At least {int(n * 0.7)} factors MUST use np.where(). This is non-negotiable.
-
-Now output EXACTLY {n} factors starting with '[':""".strip()
+REMEMBER: Every factor MUST have np.where. No exceptions. No (denom + 1e-8).""".strip()
 
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
@@ -370,7 +382,7 @@ class PositiveAgents:
         **kwargs
     ) -> List[Dict[str, Any]]:
         """
-        生成因子 - 使用简化 prompt 强制 baseline 模式
+        生成因子 - 强制 np.where，禁止 (denom + 1e-8)
         """
         self.logger.info(f"[positive] Generating {target_n} factors for round {current_round}")
 
@@ -395,7 +407,7 @@ class PositiveAgents:
         pool: List[Dict[str, Any]] = []
         seen_norms = set()
 
-        baseline_pattern_count = 0  # 统计使用 baseline 模式的因子数
+        np_where_count = 0
 
         for attempt in range(1, max_attempts + 1):
             need = target_n - len(pool)
@@ -404,15 +416,15 @@ class PositiveAgents:
 
             thr = _sim_thr(attempt)
             ask_n = max(need + 2, min(batch_size, target_n + 4))
-            temp = 0.50 if attempt == 1 else min(0.65, max(0.50, GPT_TEMP_DEFAULT))
+            temp = 0.40 if attempt == 1 else min(0.50, max(0.40, GPT_TEMP_DEFAULT))
 
             self.logger.info(
                 f"[positive] attempt {attempt}/{max_attempts} need={need} ask_n={ask_n} "
                 f"sim_thr={thr:.2f} temp={temp:.2f}"
             )
 
-            # 使用简化的 prompt
-            prompt = _build_simplified_prompt(
+            # 使用超严格的 prompt
+            prompt = _build_ultra_strict_prompt(
                 positives=positives,
                 negatives=negatives,
                 n=ask_n,
@@ -434,72 +446,85 @@ class PositiveAgents:
                 self.logger.info("[positive] parser found 0 items")
                 continue
 
-            rejected = {"validate": 0, "fields": 0, "lookahead": 0, "duplicate": 0, "similarity": 0, "no_baseline_pattern": 0}
+            rejected = {
+                "no_np_where": 0,
+                "wrong_format": 0,
+                "lookahead": 0,
+                "duplicate": 0,
+                "similarity": 0
+            }
 
             accepted_this = []
             for it in parsed:
                 code_raw = it.get("code", "")
-                code = validate_and_fix_code(code_raw)
-                if not code:
-                    rejected["validate"] += 1
-                    continue
-
-                if not _uses_only_allowed_fields(code):
-                    rejected["fields"] += 1
+                
+                # ========== 第一关：必须有 np.where ========== #
+                if not _must_have_np_where(code_raw):
+                    rejected["no_np_where"] += 1
                     continue
                 
+                # ========== 第二关：使用简化验证 ========== #
+                code = _simple_validate(code_raw)
+                if not code:
+                    rejected["wrong_format"] += 1
+                    continue
+                
+                # ========== 第三关：检查 look-ahead ========== #
                 if not _enforce_no_lookahead(code):
                     rejected["lookahead"] += 1
                     continue
 
+                # ========== 第四关：去重 ========== #
                 norm = normalize_code(code)
                 if not norm or norm in seen_norms:
                     rejected["duplicate"] += 1
                     continue
 
-                # 检查是否使用 baseline 模式
-                has_bp = _has_baseline_pattern(code)
-                
+                # ========== 通过所有检查 ========== #
                 seen_norms.add(norm)
-                accepted_this.append({"code": code, "has_baseline_pattern": has_bp})
-                
-                if has_bp:
-                    baseline_pattern_count += 1
+                accepted_this.append({"code": code})
+                np_where_count += 1
                 
                 if len(accepted_this) + len(pool) >= target_n:
                     break
 
             if accepted_this:
-                bp_count = sum(1 for x in accepted_this if x.get("has_baseline_pattern"))
                 self.logger.info(
                     f"[positive] attempt {attempt}: +{len(accepted_this)} "
-                    f"(cum {len(pool) + len(accepted_this)}, {bp_count} with baseline pattern)"
+                    f"(cum {len(pool) + len(accepted_this)}, all with np.where ✅)"
                 )
                 if any(rejected.values()):
                     self.logger.info(
-                        f"[positive] rejected: validate={rejected['validate']}, "
-                        f"fields={rejected['fields']}, lookahead={rejected['lookahead']}, "
-                        f"dup={rejected['duplicate']}, sim={rejected['similarity']}, "
-                        f"no_pattern={rejected['no_baseline_pattern']}"
+                        f"[positive] rejected: no_np_where={rejected['no_np_where']}, "
+                        f"wrong_format={rejected['wrong_format']}, "
+                        f"lookahead={rejected['lookahead']}, "
+                        f"dup={rejected['duplicate']}, sim={rejected['similarity']}"
                     )
                 pool.extend(accepted_this)
             else:
                 self.logger.info(f"[positive] attempt {attempt}: no accepted")
+                if parsed:
+                    self.logger.warning(
+                        f"[positive] parsed {len(parsed)} but all rejected: "
+                        f"no_np_where={rejected['no_np_where']}, "
+                        f"wrong_format={rejected['wrong_format']}, "
+                        f"lookahead={rejected['lookahead']}, "
+                        f"dup={rejected['duplicate']}"
+                    )
 
         # 最终统计
-        final_bp_count = sum(1 for x in pool[:target_n] if x.get("has_baseline_pattern"))
-        bp_rate = final_bp_count / target_n if target_n > 0 else 0
+        np_where_rate = np_where_count / target_n if target_n > 0 else 0
         
         self.logger.info(
             f"[positive] Final: {len(pool)} factors, "
-            f"{final_bp_count}/{target_n} ({bp_rate:.1%}) use baseline pattern"
+            f"{np_where_count}/{target_n} ({np_where_rate:.1%}) use np.where"
         )
         
-        if bp_rate < 0.5:
+        if np_where_rate < 1.0:
             self.logger.warning(
-                f"⚠️ WARNING: Only {bp_rate:.1%} factors use baseline pattern (target: 70%+)"
+                f"⚠️ WARNING: Only {np_where_rate:.1%} factors use np.where (target: 100%)"
             )
-            self.logger.warning("Consider: 1) Lower temperature, 2) Simplify prompt further")
+            self.logger.warning("All factors MUST use np.where. Check prompt and GPT response.")
 
         out = []
         for i, cand in enumerate(pool[:target_n], 1):
