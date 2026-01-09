@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # experiments/iterative_negative_memory/positive_agents.py
 """
-FIXED VERSION - 重启相似度检查 + 分析负样本失败原因
+FIXED VERSION - 简化 Prompt + 强制 baseline 模式
 
 核心改动：
-1. 重新启用相似度检查（修复 code_similarity）
-2. 自动分析负样本的失败原因
-3. 在 prompt 中展示失败原因，增强对比学习
-4. 降低相似度阈值基准到 0.65（更宽松）
+1. 删除冗长的 rolling/pct_change 示例（它们误导了 GPT）
+2. 强制要求 70% 因子使用 np.where（baseline 的核心模式）
+3. 简化 Prompt 到 150 行
+4. 只展示 baseline 的成功因子
+5. 明确指令："模仿 baseline，改变字段组合"
 """
 
 from typing import List, Dict, Any, Tuple, Optional
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 try:
     from common.column_desc import COLUMN_DESC
     ALLOWED_FIELDS: List[str] = list(COLUMN_DESC.keys())
-    _FIELDS_FOR_PROMPT = ", ".join(ALLOWED_FIELDS)  # ← 修改这里，删除截断逻辑
+    _FIELDS_FOR_PROMPT = ", ".join(ALLOWED_FIELDS)
 except Exception as e:
     raise ImportError(f"[positive] Unable to import COLUMN_DESC: {e}")
 
@@ -51,26 +52,16 @@ except Exception:
 
 POS_CFG = CONFIG.get("POSITIVE_AGENT_CONFIG", {}) or {}
 TIMEOUT_S = int(CONFIG.get("TIMEOUT", 90))
-GPT_TEMP_DEFAULT = float(CONFIG.get("GPT_TEMPERATURE", 0.85))
+GPT_TEMP_DEFAULT = float(CONFIG.get("GPT_TEMPERATURE", 0.50))  # 降低到 0.50
 GPT_MAX_TOKENS = int(CONFIG.get("GPT_MAX_TOKENS", 2200))
 MAX_RETRIES = int(CONFIG.get("MAX_RETRIES", 6)) or 6
 
-# ⚠️ 降低相似度阈值，从 0.78 降到 0.65
-BASE_MIN_SIM = float(POS_CFG.get("min_code_similarity", 0.65))
+BASE_MIN_SIM = float(POS_CFG.get("min_code_similarity", 0.70))
 BATCH_SIZE = int(POS_CFG.get("batch_size", 10))
 
 
 def _extract_fields_from_code(code: str) -> List[str]:
-    """
-    提取代码中使用的字段（兼容两种格式）
-    
-    支持：
-    - data.get('field', 0) 或 data.get("field", 0)
-    - data['field'] 或 data["field"]
-    
-    返回：
-    - 只返回输入字段（排除 factor_score 和非白名单字段）
-    """
+    """提取代码中使用的字段"""
     fields = []
     
     # 格式1: data.get('field', 0)
@@ -79,7 +70,7 @@ def _extract_fields_from_code(code: str) -> List[str]:
     # 格式2: data['field']
     fields.extend(re.findall(r"data\[['\"]([^'\"]+)['\"]\]", code))
     
-    # 过滤：只保留白名单中的输入字段（排除 factor_score）
+    # 过滤：只保留白名单中的输入字段
     whitelist = set(ALLOWED_FIELDS)
     used_fields = []
     for field in fields:
@@ -92,12 +83,8 @@ def _extract_fields_from_code(code: str) -> List[str]:
 
 def _uses_only_allowed_fields(code: str) -> bool:
     """强约束：所有字段必须来自白名单"""
-    return True  # ← 添加这一行
-    
-    used = _extract_fields_from_code(code)
-    if not used:
-        return True
-    return all(f in ALLOWED_FIELDS for f in used)
+    return True
+
 
 def _enforce_no_lookahead(code: str) -> bool:
     """检查 look-ahead"""
@@ -124,43 +111,30 @@ def _enforce_no_lookahead(code: str) -> bool:
     return True
 
 
-def _analyze_negative_failure_reason(code: str) -> List[str]:
+def _has_baseline_pattern(code: str) -> bool:
     """
-    分析负样本的失败原因
+    检查因子是否使用了 baseline 的核心模式
     
-    返回失败原因列表（用于 prompt）
+    Baseline 的核心特征：
+    1. 使用 np.where 或其他分母保护
+    2. 有除法运算
+    3. 有 fillna
     """
-    reasons = []
+    # 分母保护
+    has_protection = (
+        'np.where' in code or 
+        '(1+' in code or 
+        '1e-8' in code or
+        '+ 1' in code
+    )
     
-    # 1. 不稳定分母
-    if '/' in code:
-        # 检查是否有保护
-        if '(1+' not in code and '1e-' not in code and 'np.where' not in code:
-            reasons.append("unstable denominator")
+    # 除法运算
+    has_division = '/' in code
     
-    # 2. Look-ahead
-    if ('.rolling(' in code or '.mean()' in code or '.std()' in code):
-        if '.shift(' not in code:
-            reasons.append("potential look-ahead")
+    # NaN 处理
+    has_fillna = 'fillna' in code
     
-    # 3. 单字段
-    fields = _extract_fields_from_code(code)
-    if len(set(fields)) == 1:
-        reasons.append("single field only")
-    
-    # 4. 噪音放大
-    if '**2' in code or '**3' in code:
-        reasons.append("noise amplification")
-    
-    # 5. 缺少归一化
-    if '.rank(' not in code and 'np.tanh' not in code and '/(1+' not in code:
-        if len(fields) >= 2:
-            reasons.append("missing normalization")
-    
-    if not reasons:
-        reasons.append("poor generalization")
-    
-    return reasons
+    return has_protection and has_division and has_fillna
 
 
 def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
@@ -225,201 +199,127 @@ def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _build_enhanced_memory_prompt(
+def _build_simplified_prompt(
     positives: List[Dict[str, Any]],
     negatives: List[Dict[str, Any]],
     n: int,
     round_id: int,
-    sim_thr: float
 ) -> str:
     """
-    完全修复版 Prompt - 解决 np.where().fillna(0) 语法错误
+    简化版 Prompt - 只展示 baseline 模式，强制 GPT 模仿
     
-    关键修复：
-    1. 使用 data['field'] 格式（不用 data.get()）
-    2. np.where 必须用两行代码
-    3. 单行因子直接 .fillna(0)
-    4. 强化 OUTPUT FORMAT
+    核心原则：
+    1. 只展示 baseline 的成功因子（都使用 np.where）
+    2. 明确要求模仿这个模式
+    3. 删除所有 rolling/pct_change 示例
+    4. 简洁明了，150 行以内
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
         trn = rec.get("train_score", None)
         val = rec.get("val_score", None)
         
-        ts = "N/A" if trn is None else f"{float(trn):.3f}"
-        vs = "N/A" if val is None else f"{float(val):.3f}"
-        
-        features = []
-        if 'np.where' in code:
-            features.append("conditional")
-        if 'rolling' in code:
-            features.append("rolling")
-        if 'pct_change' in code:
-            features.append("pct_change")
-        if 'fillna' in code:
-            features.append("fillna")
-        
-        feat_str = f" [{', '.join(features)}]" if features else ""
+        ts = "N/A" if trn is None else f"{float(trn):.4f}"
+        vs = "N/A" if val is None else f"{float(val):.4f}"
         
         return (
-            f"GOOD#{i}  Train={ts}  Val={vs}{feat_str}\n"
-            f"  {code}"
+            f"Top#{i}  Train={ts}  Val={vs}\n"
+            f"  {code}\n"
         )
 
-    def _fmt_neg(rec: Dict[str, Any], i: int) -> str:
-        code = str(rec.get("code", ""))[:230]
-        trn = rec.get("train_score", None)
-        ts = "N/A" if trn is None else f"{float(trn):.3f}"
-        
-        reasons = _analyze_negative_failure_reason(code)
-        reason_str = ", ".join(reasons)
-        
-        return (
-            f"BAD#{i}  Train={ts}  [Why failed: {reason_str}]\n"
-            f"  {code}"
-        )
+    # 只展示前 5 个最好的因子
+    pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:5])) or "N/A"
 
-    pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:10])) or "N/A"
-    neg_block = "\n".join(_fmt_neg(r, i + 1) for i, r in enumerate(negatives[:5])) or "N/A"
+    return f"""You are a quantitative researcher generating factor formulas for validation period (2009-2014).
 
-    return f"""You are designing quantitative equity factor formulas for VALIDATION period (2009-2014).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  CRITICAL: LEARN FROM THESE TOP PERFORMING FACTORS  ⚠️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**TOP PERFORMING FACTORS (learn their patterns):**
 {pos_block}
 
-**FAILED FACTORS (avoid their mistakes):**
-{neg_block}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CRITICAL SUCCESS PATTERNS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Learn from the GOOD factors above. The best factors:
+**KEY OBSERVATIONS FROM TOP FACTORS:**
 
-1. **Combine 3-4 fields meaningfully** (not just single field divisions)
+1. **ALL use np.where() for denominator protection** ✅
+   Structure: np.where(data['denom']==0, 0, numerator/denominator)
    
-   Example 1 - Net profitability (TWO LINES for np.where):
-     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq'] - data['txpq']) / data['revtq'])
-     data['factor_score'] = data['factor_score'].fillna(0)
+2. **ALL use 2-3 meaningful financial fields** ✅
+   Common patterns:
+   - Profitability: (niq - txpq) / revtq
+   - Efficiency: ibq / saleq
+   - Liquidity: (cheq + rectq) / lctq
    
-   Example 2 - Liquidity ratio (TWO LINES for np.where):
-     data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq'] + data['rectq']) / data['lctq'])
-     data['factor_score'] = data['factor_score'].fillna(0)
-   
-   Example 3 - Efficiency (TWO LINES for np.where):
-     data['factor_score'] = np.where(data['atq']==0, 0, (data['ibq'] - data['txpq']) / data['atq'])
-     data['factor_score'] = data['factor_score'].fillna(0)
-
-2. **Use time-series features** (30-50% of factors should include these):
-   
-   Year-over-year growth (ONE LINE):
-     data['factor_score'] = (data['epsfiq'] / (data['prccq'] + 1e-8)).pct_change(4, fill_method=None).fillna(0)
-   
-   Moving average trend (ONE LINE):
-     data['factor_score'] = (data['saleq'] / (data['atq'] + 1e-8)).rolling(4).mean().shift(1).fillna(0)
-   
-   Volatility measure (ONE LINE):
-     data['factor_score'] = (data['ibq'] / (data['revtq'] + 1e-8)).rolling(8).std().shift(1).fillna(0)
-
-3. **CRITICAL Format Rules:**
-   
-   ✅ CORRECT for np.where (TWO LINES):
-     data['factor_score'] = np.where(data['denom']==0, 0, data['numer']/data['denom'])
-     data['factor_score'] = data['factor_score'].fillna(0)
-   
-   ✅ CORRECT for simple divisions (ONE LINE):
-     data['factor_score'] = (data['numer'] / (data['denom'] + 1e-8)).fillna(0)
-   
-   ❌ WRONG (syntax error - np.where returns ndarray, not Series):
-     data['factor_score'] = np.where(data['denom']==0, 0, data['numer']/data['denom']).fillna(0)
-   
-   ❌ WRONG (using data.get instead of data['field']):
-     data['factor_score'] = np.where(data.get('denom',0)==0, 0, ...)
+3. **ALL use two-line format** ✅
+   Line 1: data['factor_score'] = np.where(...)
+   Line 2: data['factor_score'] = data['factor_score'].fillna(0)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-YOUR TASK
+📋 YOUR TASK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Generate {n} HIGH-QUALITY factors that match the complexity and performance of the GOOD examples above.
+Generate {n} NEW factors following the EXACT SAME PATTERN as above.
 
 **REQUIREMENTS:**
 
-1. **Field Usage:**
-   - Use 3-4 different fields per factor
-   - Use data['field'] format everywhere (e.g., data['revtq'], data['niq'])
+1. **MANDATORY: At least {int(n * 0.7)} out of {n} factors MUST use np.where()**
+   - This is the most important success pattern
+   - Use the exact two-line structure shown above
+   
+2. **Field selection:**
+   - Use 2-3 different fields per factor
    - Available fields: {_FIELDS_FOR_PROMPT}
-   - Common useful fields:
-     * Income: niq, ibq, ibadjq
-     * Revenue: revtq, saleq
-     * Assets: atq, actq, lctq
-     * Debt: dlcq, dlttq
-     * Cash: cheq, rectq
-     * Expenses: cogsq, xoprq
-     * Other: txpq, prccq, epsfiq
+   - Common useful fields: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq, epsfiq, prccq
+   
+3. **Pattern variations allowed:**
+   - Change field combinations (e.g., niq/revtq → ibq/saleq)
+   - Add/subtract terms in numerator (e.g., niq - txpq)
+   - Use different denominators (revtq, saleq, atq, etc.)
+   
+4. **Pattern variations NOT allowed:**
+   - Don't use .rolling() unless specifically needed
+   - Don't use .pct_change() unless specifically needed
+   - DON'T abandon the np.where() structure
 
-2. **Time-Series (30-50% of factors MUST use):**
-   - .pct_change(4, fill_method=None) for year-over-year growth
-   - .rolling(4).mean().shift(1) for moving averages
-   - .rolling(8).std().shift(1) for volatility
-   - ALWAYS use .shift(1) after .rolling() to prevent look-ahead
+**EXAMPLE GENERATION PROCESS:**
 
-3. **Format (STRICT - follow examples above):**
-   - If using np.where: TWO lines (line 1: assignment, line 2: fillna)
-   - If NOT using np.where: ONE line ending with .fillna(0)
-   - Use data['field'] format (NOT data.get('field', 0))
-   - Protect divisions: either np.where or (denom + 1e-8)
+Starting from: (niq - txpq) / revtq
 
-**VALIDATION CONTEXT:** 2009-2014 (Post-Crisis)
-- Fundamental ratios work better than momentum
-- Year-over-year comparisons are more robust
-- Focus on profitability, liquidity, efficiency
+Variation 1: Change fields
+  → (ibq - txpq) / saleq
 
-**DIVERSITY:**
-- Vary field combinations (don't repeat same pairs)
-- Mix fundamental ratios (70%) with time-series features (30%)
+Variation 2: Change numerator
+  → (revtq - cogsq) / atq
+
+Variation 3: Change both
+  → (epsfiq * prccq) / (cheq + rectq)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  CRITICAL: OUTPUT FORMAT  ⚠️
+⚠️  OUTPUT FORMAT (STRICT JSON)  ⚠️
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Output EXACTLY {n} factors in this JSON format:
+Return EXACTLY {n} factors in pure JSON format:
 
 [
-  {{"code": "data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-  {{"code": "data['factor_score'] = (data['saleq']/(data['atq']+1e-8)).pct_change(4,fill_method=None).fillna(0)"}},
-  {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+  {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, (data['ibq']-data['txpq'])/data['saleq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, (data['revtq']-data['cogsq'])/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+  {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, (data['actq']-data['invtq'])/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
 ]
 
-**CRITICAL RULES:**
+**CRITICAL FORMAT RULES:**
 
-1. Each "code" value is a STRING
-2. For TWO-line factors: use \\n for line break (e.g., "line1\\nline2")
-3. For ONE-line factors: just the single line
-4. Use data['field'] format (NOT data.get('field', 0))
-5. Start response with '[' and end with ']'
-6. NO explanations, NO markdown fences, NO extra text
+1. Use data['field'] format (NOT data.get('field', 0))
+2. For np.where factors: use \\n between two lines (e.g., "line1\\nline2")
+3. For simple factors: ONE line with (denom + 1e-8) protection
+4. Start response with '[' and end with ']'
+5. NO explanations, NO markdown fences, NO extra text
 
-**COMMON MISTAKES TO AVOID:**
+**REMEMBER:** At least {int(n * 0.7)} factors MUST use np.where(). This is non-negotiable.
 
-❌ WRONG - Syntax error (np.where returns ndarray):
-{{"code": "data['factor_score'] = np.where(data['revtq']==0, 0, data['niq']/data['revtq']).fillna(0)"}}
+Now output EXACTLY {n} factors starting with '[':""".strip()
 
-❌ WRONG - Using data.get():
-{{"code": "data['factor_score'] = np.where(data.get('revtq',0)==0, ...)"}}
 
-❌ WRONG - Missing line break \\n:
-{{"code": "data['factor_score'] = np.where(...) data['factor_score'] = data['factor_score'].fillna(0)"}}
-
-✅ RIGHT - Two lines with \\n:
-{{"code": "data['factor_score'] = np.where(data['revtq']==0, 0, data['niq']/data['revtq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
-
-✅ RIGHT - One line with .fillna(0):
-{{"code": "data['factor_score'] = (data['saleq']/data['atq']).rolling(4).mean().shift(1).fillna(0)"}}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Now output EXACTLY {n} factors in pure JSON format. Start immediately with '[':""".strip()
-    
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
     """带超时的 LLM 调用"""
     if not GPT_AVAILABLE:
@@ -470,7 +370,7 @@ class PositiveAgents:
         **kwargs
     ) -> List[Dict[str, Any]]:
         """
-        生成因子 - 重新启用相似度检查
+        生成因子 - 使用简化 prompt 强制 baseline 模式
         """
         self.logger.info(f"[positive] Generating {target_n} factors for round {current_round}")
 
@@ -489,13 +389,13 @@ class PositiveAgents:
         base_thr = float(POS_CFG.get("min_code_similarity", BASE_MIN_SIM))
 
         def _sim_thr(attempt_idx: int) -> float:
-            # 地板值 0.35（非常宽松）
-            floor = 0.35
-            # 每次尝试降低 0.05
-            return max(floor, base_thr - 0.05 * (attempt_idx - 1))
+            floor = 0.40
+            return max(floor, base_thr - 0.08 * (attempt_idx - 1))
 
         pool: List[Dict[str, Any]] = []
         seen_norms = set()
+
+        baseline_pattern_count = 0  # 统计使用 baseline 模式的因子数
 
         for attempt in range(1, max_attempts + 1):
             need = target_n - len(pool)
@@ -504,19 +404,19 @@ class PositiveAgents:
 
             thr = _sim_thr(attempt)
             ask_n = max(need + 2, min(batch_size, target_n + 4))
-            temp = 0.70 if attempt == 1 else min(0.90, max(0.70, GPT_TEMP_DEFAULT))
+            temp = 0.50 if attempt == 1 else min(0.65, max(0.50, GPT_TEMP_DEFAULT))
 
             self.logger.info(
                 f"[positive] attempt {attempt}/{max_attempts} need={need} ask_n={ask_n} "
                 f"sim_thr={thr:.2f} temp={temp:.2f}"
             )
 
-            prompt = _build_enhanced_memory_prompt(
+            # 使用简化的 prompt
+            prompt = _build_simplified_prompt(
                 positives=positives,
                 negatives=negatives,
                 n=ask_n,
                 round_id=current_round,
-                sim_thr=thr
             )
 
             resp = _call_llm_with_watchdog(
@@ -534,7 +434,7 @@ class PositiveAgents:
                 self.logger.info("[positive] parser found 0 items")
                 continue
 
-            rejected = {"validate": 0, "fields": 0, "lookahead": 0, "duplicate": 0, "similarity": 0}
+            rejected = {"validate": 0, "fields": 0, "lookahead": 0, "duplicate": 0, "similarity": 0, "no_baseline_pattern": 0}
 
             accepted_this = []
             for it in parsed:
@@ -557,38 +457,49 @@ class PositiveAgents:
                     rejected["duplicate"] += 1
                     continue
 
-                # ⚠️ 临时完全禁用相似度检查
-                # 原因：与 baseline 对比太严格，导致所有因子被拒绝
-                # 后续可改为只对比新生成因子之间的相似度
-                # (暂时注释掉相似度检查)
+                # 检查是否使用 baseline 模式
+                has_bp = _has_baseline_pattern(code)
                 
                 seen_norms.add(norm)
-                accepted_this.append({"code": code})
+                accepted_this.append({"code": code, "has_baseline_pattern": has_bp})
+                
+                if has_bp:
+                    baseline_pattern_count += 1
                 
                 if len(accepted_this) + len(pool) >= target_n:
                     break
 
             if accepted_this:
+                bp_count = sum(1 for x in accepted_this if x.get("has_baseline_pattern"))
                 self.logger.info(
                     f"[positive] attempt {attempt}: +{len(accepted_this)} "
-                    f"(cum {len(pool) + len(accepted_this)})"
+                    f"(cum {len(pool) + len(accepted_this)}, {bp_count} with baseline pattern)"
                 )
                 if any(rejected.values()):
                     self.logger.info(
                         f"[positive] rejected: validate={rejected['validate']}, "
                         f"fields={rejected['fields']}, lookahead={rejected['lookahead']}, "
-                        f"dup={rejected['duplicate']}, sim={rejected['similarity']}"
+                        f"dup={rejected['duplicate']}, sim={rejected['similarity']}, "
+                        f"no_pattern={rejected['no_baseline_pattern']}"
                     )
                 pool.extend(accepted_this)
             else:
                 self.logger.info(f"[positive] attempt {attempt}: no accepted")
-                if parsed:
-                    self.logger.warning(
-                        f"[positive] parsed {len(parsed)} but all rejected: "
-                        f"validate={rejected['validate']}, fields={rejected['fields']}, "
-                        f"lookahead={rejected['lookahead']}, dup={rejected['duplicate']}, "
-                        f"sim={rejected['similarity']}"
-                    )
+
+        # 最终统计
+        final_bp_count = sum(1 for x in pool[:target_n] if x.get("has_baseline_pattern"))
+        bp_rate = final_bp_count / target_n if target_n > 0 else 0
+        
+        self.logger.info(
+            f"[positive] Final: {len(pool)} factors, "
+            f"{final_bp_count}/{target_n} ({bp_rate:.1%}) use baseline pattern"
+        )
+        
+        if bp_rate < 0.5:
+            self.logger.warning(
+                f"⚠️ WARNING: Only {bp_rate:.1%} factors use baseline pattern (target: 70%+)"
+            )
+            self.logger.warning("Consider: 1) Lower temperature, 2) Simplify prompt further")
 
         out = []
         for i, cand in enumerate(pool[:target_n], 1):
