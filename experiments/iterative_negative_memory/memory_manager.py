@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # experiments/iterative_negative_memory/memory_manager.py
 """
-FIXED VERSION - 混合 baseline 策略防止逐轮退化
+FIXED VERSION V2 - 更保守的混合策略
 
 核心改动：
-1. Round 2+ 始终混合 50% baseline + 50% 上一轮
-2. 防止质量逐轮下降的恶性循环
-3. 保持高质量参考基准
+1. Round 1: 100% baseline （不混合，专注学习）
+2. Round 2: 80% baseline + 20% round 1
+3. Round 3+: 70% baseline + 30% previous
+4. 始终保持 baseline 的主导地位
 """
 
 import os
@@ -30,10 +31,12 @@ logger = logging.getLogger(__name__)
 
 class MemoryManager:
     """
-    记忆管理器（改进版）
+    记忆管理器（更保守的混合策略）
     
     关键改进：
-    - Round 2+ 混合 baseline 和上一轮，防止质量退化
+    - Round 1: 100% baseline （避免过早混合）
+    - Round 2: 80% baseline + 20% round 1
+    - Round 3+: 70% baseline + 30% previous
     """
 
     def __init__(self):
@@ -56,20 +59,14 @@ class MemoryManager:
 
     def get_memory_for_round(self, round_num: int) -> List[Dict]:
         """
-        返回本轮的正样本记忆
-        
-        ⚠️ 关键改进：Round 2+ 混合 baseline + 上一轮
+        返回本轮的正样本记忆（更保守的混合策略）
         
         策略：
-        - Round 1: 100% baseline (Top 10)
-        - Round 2+: 50% baseline (Top 5) + 50% 上一轮 (Top 5)
-        
-        这样可以：
-        1. 始终保持高质量参考（来自 baseline）
-        2. 避免质量逐轮下降的恶性循环
-        3. 同时学习上一轮的改进
+        - Round 1: 100% baseline (Top 10) - 专注学习 baseline
+        - Round 2: 80% baseline (Top 8) + 20% round 1 (Top 2)
+        - Round 3+: 70% baseline (Top 7) + 30% previous (Top 3)
         """
-        # ========== Round 1: 使用 baseline ========== #
+        # ========== Round 1: 100% baseline ========== #
         if round_num <= 1:
             csv_path = BASELINE_FILE
             
@@ -83,7 +80,7 @@ class MemoryManager:
             positives = top10.to_dict(orient="records")
             
             self.logger.info(
-                f"[memory] Round {round_num} 加载了 {len(positives)} 个正样本 (来自 baseline)"
+                f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本"
             )
             if len(top10) > 0:
                 val_range = f"[{top10['val_score'].min():.4f}, {top10['val_score'].max():.4f}]"
@@ -91,70 +88,100 @@ class MemoryManager:
             
             return positives
         
-        # ========== Round 2+: 混合策略 ========== #
-        # 读取 baseline Top 5
+        # ========== Round 2: 80% baseline + 20% round 1 ========== #
+        if round_num == 2:
+            try:
+                baseline_df = pd.read_csv(BASELINE_FILE)
+                baseline_df["val_score"] = pd.to_numeric(baseline_df["val_score"], errors="coerce")
+                baseline_top8 = baseline_df.sort_values("val_score", ascending=False).head(8)
+            except Exception as e:
+                self.logger.warning(f"读取 baseline 失败: {e}")
+                baseline_top8 = pd.DataFrame()
+            
+            prev_path = os.path.join(RESULTS_DIR, f"round_1_factor_metrics.csv")
+            
+            if os.path.exists(prev_path):
+                try:
+                    prev_df = pd.read_csv(prev_path)
+                    prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
+                    prev_top2 = prev_df.sort_values("val_score", ascending=False).head(2)
+                except Exception as e:
+                    self.logger.warning(f"读取 round 1 失败: {e}")
+                    prev_top2 = pd.DataFrame()
+            else:
+                prev_top2 = pd.DataFrame()
+            
+            # 合并
+            frames = []
+            if not baseline_top8.empty:
+                frames.append(baseline_top8)
+            if not prev_top2.empty:
+                frames.append(prev_top2)
+            
+            if not frames:
+                raise ValueError(f"Round {round_num}: 无法加载任何记忆")
+            
+            combined = pd.concat(frames, ignore_index=True)
+            combined = combined.sort_values("val_score", ascending=False).head(10)
+            
+            positives = combined.to_dict(orient="records")
+            
+            baseline_count = len(baseline_top8) if not baseline_top8.empty else 0
+            prev_count = len(prev_top2) if not prev_top2.empty else 0
+            
+            self.logger.info(
+                f"[memory] Round {round_num} 使用混合策略: "
+                f"{baseline_count} from baseline + {prev_count} from round 1 "
+                f"(80/20 比例)"
+            )
+            self.logger.info(f"  - 最终选取 {len(positives)} 个正样本")
+            
+            return positives
+        
+        # ========== Round 3+: 70% baseline + 30% previous ========== #
         try:
             baseline_df = pd.read_csv(BASELINE_FILE)
             baseline_df["val_score"] = pd.to_numeric(baseline_df["val_score"], errors="coerce")
-            baseline_top5 = baseline_df.sort_values("val_score", ascending=False).head(5)
+            baseline_top7 = baseline_df.sort_values("val_score", ascending=False).head(7)
         except Exception as e:
-            self.logger.warning(f"读取 baseline 失败: {e}，退化为只用上一轮")
-            baseline_top5 = pd.DataFrame()
+            self.logger.warning(f"读取 baseline 失败: {e}")
+            baseline_top7 = pd.DataFrame()
         
-        # 读取上一轮 Top 5
         prev_path = os.path.join(RESULTS_DIR, f"round_{round_num-1}_factor_metrics.csv")
         
-        if not os.path.exists(prev_path):
-            self.logger.warning(f"上一轮文件不存在: {prev_path}")
-            # 如果上一轮不存在，只用 baseline
-            if not baseline_top5.empty:
-                return baseline_top5.head(10).to_dict(orient="records")
-            else:
-                raise FileNotFoundError(f"无法加载任何记忆")
-        
-        try:
-            prev_df = pd.read_csv(prev_path)
-            prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
-            prev_top5 = prev_df.sort_values("val_score", ascending=False).head(5)
-        except Exception as e:
-            self.logger.warning(f"读取上一轮失败: {e}")
-            prev_top5 = pd.DataFrame()
+        if os.path.exists(prev_path):
+            try:
+                prev_df = pd.read_csv(prev_path)
+                prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
+                prev_top3 = prev_df.sort_values("val_score", ascending=False).head(3)
+            except Exception as e:
+                self.logger.warning(f"读取上一轮失败: {e}")
+                prev_top3 = pd.DataFrame()
+        else:
+            prev_top3 = pd.DataFrame()
         
         # 合并
         frames = []
-        if not baseline_top5.empty:
-            frames.append(baseline_top5)
-        if not prev_top5.empty:
-            frames.append(prev_top5)
+        if not baseline_top7.empty:
+            frames.append(baseline_top7)
+        if not prev_top3.empty:
+            frames.append(prev_top3)
         
         if not frames:
             raise ValueError(f"Round {round_num}: 无法加载任何记忆")
         
         combined = pd.concat(frames, ignore_index=True)
-        
-        # 按 val_score 排序，取 Top 10
         combined = combined.sort_values("val_score", ascending=False).head(10)
-
-        # 确保包含 val_score 用于 prompt
-        if 'val_score' not in combined.columns and os.path.exists(BASELINE_FILE):
-            # 从baseline读取val_score
-            baseline_df = pd.read_csv(BASELINE_FILE)
-            if 'val_score' in baseline_df.columns:
-                combined = combined.merge(
-                    baseline_df[['code', 'val_score']], 
-                    on='code', 
-                    how='left'
-                )
         
         positives = combined.to_dict(orient="records")
         
-        # ========== 日志输出改进的策略信息 ========== #
-        baseline_count = len(baseline_top5) if not baseline_top5.empty else 0
-        prev_count = len(prev_top5) if not prev_top5.empty else 0
+        baseline_count = len(baseline_top7) if not baseline_top7.empty else 0
+        prev_count = len(prev_top3) if not prev_top3.empty else 0
         
         self.logger.info(
             f"[memory] Round {round_num} 使用混合策略: "
-            f"{baseline_count} from baseline + {prev_count} from round {round_num-1}"
+            f"{baseline_count} from baseline + {prev_count} from round {round_num-1} "
+            f"(70/30 比例)"
         )
         self.logger.info(f"  - 最终选取 {len(positives)} 个正样本")
         
@@ -172,7 +199,16 @@ class MemoryManager:
         n: int = 5,
         positives_for_context: Optional[List[Dict]] = None,
     ) -> List[Dict]:
-        """生成负样本"""
+        """
+        生成负样本
+        
+        改进：Round 1 使用更少的负样本（避免干扰）
+        """
+        # Round 1 使用 0 个负样本（专注学习 baseline）
+        if round_num == 1:
+            self.logger.info(f"[memory] Round 1: 跳过负样本生成（专注学习 baseline）")
+            return []
+        
         positives_for_context = positives_for_context or []
         
         pos_ctx = []
@@ -228,6 +264,7 @@ class MemoryManager:
             memory.append({
                 "code": r.get("code", ""),
                 "train_score": float(r.get("train_score", 0.0) or 0.0),
+                "val_score": float(r.get("val_score", 0.0) or 0.0),  # 添加 val_score
                 "memory_type": "positive",
             })
         
