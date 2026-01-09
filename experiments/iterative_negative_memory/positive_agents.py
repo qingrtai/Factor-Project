@@ -67,6 +67,9 @@ def _extract_fields_from_code(code: str) -> List[str]:
     支持：
     - data.get('field', 0) 或 data.get("field", 0)
     - data['field'] 或 data["field"]
+    
+    返回：
+    - 只返回输入字段（排除 factor_score 和非白名单字段）
     """
     fields = []
     
@@ -76,8 +79,15 @@ def _extract_fields_from_code(code: str) -> List[str]:
     # 格式2: data['field']
     fields.extend(re.findall(r"data\[['\"]([^'\"]+)['\"]\]", code))
     
-    # 去重并返回
-    return list(set(fields))
+    # 过滤：只保留白名单中的输入字段（排除 factor_score）
+    whitelist = set(ALLOWED_FIELDS)
+    used_fields = []
+    for field in fields:
+        field_clean = field.strip()
+        if field_clean in whitelist and field_clean not in used_fields:
+            used_fields.append(field_clean)
+    
+    return used_fields
 
 
 def _uses_only_allowed_fields(code: str) -> bool:
