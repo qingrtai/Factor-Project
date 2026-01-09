@@ -233,14 +233,13 @@ def _build_enhanced_memory_prompt(
     sim_thr: float
 ) -> str:
     """
-    COMPLETE FIX - 学习baseline真正的成功模式
+    完全修复版 Prompt - 解决 np.where().fillna(0) 语法错误
     
     关键修复：
-    1. 统一使用 data.get('field', 0) 格式
-    2. 强调复杂性（3-4个字段组合）
-    3. 禁止 /(1+abs()) 因为会弱化信号
-    4. 强化时序特征使用（30-50%）
-    5. 给出具体的金融比率示例
+    1. 使用 data['field'] 格式（不用 data.get()）
+    2. np.where 必须用两行代码
+    3. 单行因子直接 .fillna(0)
+    4. 强化 OUTPUT FORMAT
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
@@ -283,129 +282,144 @@ def _build_enhanced_memory_prompt(
     pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:10])) or "N/A"
     neg_block = "\n".join(_fmt_neg(r, i + 1) for i, r in enumerate(negatives[:5])) or "N/A"
 
-    return f"""
-You are designing quantitative equity factor formulas for VALIDATION period (2009-2014).
+    return f"""You are designing quantitative equity factor formulas for VALIDATION period (2009-2014).
 
-**TOP PERFORMING FACTORS (learn their SUCCESS PATTERNS):**
+**TOP PERFORMING FACTORS (learn their patterns):**
 {pos_block}
 
 **FAILED FACTORS (avoid their mistakes):**
 {neg_block}
 
-**CRITICAL SUCCESS PATTERNS - Learn from best factors above:**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL SUCCESS PATTERNS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. **COMPLEX FINANCIAL RATIOS** (Most Important!):
-   Best factors combine MULTIPLE fields meaningfully:
-   
-   Example 1 - Net profitability margin:
-     data['factor_score'] = np.where(data.get('revtq',0)==0, 0, (data.get('niq',0) - data.get('txpq',0)) / data.get('revtq',0)).fillna(0)
-   
-   Example 2 - Current ratio (liquidity):
-     data['factor_score'] = np.where(data.get('lctq',0)==0, 0, (data.get('cheq',0) + data.get('rectq',0)) / data.get('lctq',0)).fillna(0)
-   
-   Example 3 - Operating margin efficiency:
-     data['factor_score'] = np.where(data.get('atq',0)==0, 0, (data.get('ibq',0) - data.get('txpq',0)) / data.get('atq',0)).fillna(0)
+Learn from the GOOD factors above. The best factors:
 
-2. **Time-Series Features** (30-50% of factors MUST use these):
+1. **Combine 3-4 fields meaningfully** (not just single field divisions)
    
-   Year-over-year growth:
-     data['factor_score'] = (data.get('epsfiq',0) / (data.get('prccq',0) + 1e-8)).pct_change(4, fill_method=None).fillna(0)
+   Example 1 - Net profitability (TWO LINES for np.where):
+     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq'] - data['txpq']) / data['revtq'])
+     data['factor_score'] = data['factor_score'].fillna(0)
    
-   Trend with rolling average:
-     data['factor_score'] = (data.get('saleq',0) / (data.get('atq',0) + 1e-8)).rolling(4).mean().shift(1).fillna(0)
+   Example 2 - Liquidity ratio (TWO LINES for np.where):
+     data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq'] + data['rectq']) / data['lctq'])
+     data['factor_score'] = data['factor_score'].fillna(0)
    
-   Volatility measure:
-     data['factor_score'] = (data.get('ibq',0) / (data.get('revtq',0) + 1e-8)).rolling(8).std().shift(1).fillna(0)
+   Example 3 - Efficiency (TWO LINES for np.where):
+     data['factor_score'] = np.where(data['atq']==0, 0, (data['ibq'] - data['txpq']) / data['atq'])
+     data['factor_score'] = data['factor_score'].fillna(0)
 
-3. **Division Protection** (MANDATORY for all divisions):
+2. **Use time-series features** (30-50% of factors should include these):
    
-   Best practice with np.where:
-     np.where(data.get('denom',0)==0, 0, data.get('numer',0) / data.get('denom',0)).fillna(0)
+   Year-over-year growth (ONE LINE):
+     data['factor_score'] = (data['epsfiq'] / (data['prccq'] + 1e-8)).pct_change(4, fill_method=None).fillna(0)
    
-   Alternative with small constant:
-     (data.get('numer',0) / (data.get('denom',0) + 1e-8)).fillna(0)
+   Moving average trend (ONE LINE):
+     data['factor_score'] = (data['saleq'] / (data['atq'] + 1e-8)).rolling(4).mean().shift(1).fillna(0)
    
-   ⚠️ DON'T USE: data.get('numer',0) / (1 + np.abs(data.get('denom',0)))
-   This weakens signal by ~60% and produces poor results!
+   Volatility measure (ONE LINE):
+     data['factor_score'] = (data['ibq'] / (data['revtq'] + 1e-8)).rolling(8).std().shift(1).fillna(0)
 
-**YOUR TASK: Generate {n} HIGH-QUALITY factors**
-
-**STRICT REQUIREMENTS:**
-
-1. **Complexity** (CRITICAL - Most factors should be complex):
-   ✗ BAD (too simple): 
-     data['factor_score'] = data.get('niq',0) / (data.get('revtq',0) + 1e-8)
+3. **CRITICAL Format Rules:**
    
-   ✓ GOOD (complex & meaningful):
-     data['factor_score'] = np.where(data.get('revtq',0)==0, 0, (data.get('niq',0) - data.get('txpq',0)) / data.get('revtq',0)).fillna(0)
+   ✅ CORRECT for np.where (TWO LINES):
+     data['factor_score'] = np.where(data['denom']==0, 0, data['numer']/data['denom'])
+     data['factor_score'] = data['factor_score'].fillna(0)
    
-   Requirements:
+   ✅ CORRECT for simple divisions (ONE LINE):
+     data['factor_score'] = (data['numer'] / (data['denom'] + 1e-8)).fillna(0)
+   
+   ❌ WRONG (syntax error - np.where returns ndarray, not Series):
+     data['factor_score'] = np.where(data['denom']==0, 0, data['numer']/data['denom']).fillna(0)
+   
+   ❌ WRONG (using data.get instead of data['field']):
+     data['factor_score'] = np.where(data.get('denom',0)==0, 0, ...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOUR TASK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Generate {n} HIGH-QUALITY factors that match the complexity and performance of the GOOD examples above.
+
+**REQUIREMENTS:**
+
+1. **Field Usage:**
    - Use 3-4 different fields per factor
-   - Combine fields with economic meaning (subtract costs, add assets, etc.)
-   - Create meaningful financial ratios
+   - Use data['field'] format everywhere (e.g., data['revtq'], data['niq'])
+   - Available fields: {_FIELDS_FOR_PROMPT}
+   - Common useful fields:
+     * Income: niq, ibq, ibadjq
+     * Revenue: revtq, saleq
+     * Assets: atq, actq, lctq
+     * Debt: dlcq, dlttq
+     * Cash: cheq, rectq
+     * Expenses: cogsq, xoprq
+     * Other: txpq, prccq, epsfiq
 
-2. **Time-Series** (30-50% of factors MUST include):
+2. **Time-Series (30-50% of factors MUST use):**
    - .pct_change(4, fill_method=None) for year-over-year growth
    - .rolling(4).mean().shift(1) for moving averages
    - .rolling(8).std().shift(1) for volatility
    - ALWAYS use .shift(1) after .rolling() to prevent look-ahead
-   - ALWAYS end with .fillna(0)
 
-3. **Economic Intuition** (Think like a financial analyst):
-   Common meaningful ratios:
-   - Profitability: (Income - Tax) / Revenue
-   - Liquidity: (Cash + Receivables) / Current Liabilities
-   - Efficiency: Operating Income / Total Assets
-   - Leverage: Total Debt / Total Assets
-   - Growth: Current Value / Previous Period Value
+3. **Format (STRICT - follow examples above):**
+   - If using np.where: TWO lines (line 1: assignment, line 2: fillna)
+   - If NOT using np.where: ONE line ending with .fillna(0)
+   - Use data['field'] format (NOT data.get('field', 0))
+   - Protect divisions: either np.where or (denom + 1e-8)
 
-4. **Division Safety** (MANDATORY):
-   Choose ONE:
-   - np.where(denom==0, 0, numer/denom).fillna(0)  [BEST]
-   - (numer / (denom + 1e-8)).fillna(0)  [Good]
-   
-   ⚠️ NEVER use: numer / (1 + np.abs(denom))  [Weakens signal!]
+**VALIDATION CONTEXT:** 2009-2014 (Post-Crisis)
+- Fundamental ratios work better than momentum
+- Year-over-year comparisons are more robust
+- Focus on profitability, liquidity, efficiency
 
-5. **Format Requirements** (STRICT):
-   - SINGLE line per factor
-   - Use data.get('field', 0) format for ALL field access
-   - End with .fillna(0)
-   - Example: data['factor_score'] = np.where(data.get('atq',0)==0, 0, data.get('ibq',0)/data.get('atq',0)).fillna(0)
-
-**AVAILABLE FIELDS:**
-{_FIELDS_FOR_PROMPT}
-
-**Commonly useful fields:**
-Income: niq (net income), ibq (income before taxes), ibadjq (adjusted income)
-Revenue: revtq (total revenue), saleq (sales/turnover)
-Assets: atq (total assets), actq (current assets), lctq (current liabilities)
-Debt: dlcq (debt in current liabilities), dlttq (long-term debt)
-Cash: cheq (cash), rectq (receivables)
-Expenses: cogsq (cost of goods sold), xoprq (operating expense)
-Other: txpq (taxes), prccq (price), epsfiq (EPS)
-
-**VALIDATION CONTEXT: 2009-2014 (Post-Crisis)**
-- Fundamental ratios more reliable than momentum
-- Year-over-year comparisons more robust
-- Focus on profitability, liquidity, and efficiency
-
-**OUTPUT FORMAT - Return exactly {n} factors as JSON:**
-[
-  {{"code": "data['factor_score'] = np.where(data.get('revtq',0)==0, 0, (data.get('niq',0)-data.get('txpq',0))/data.get('revtq',0)).fillna(0)"}},
-  {{"code": "data['factor_score'] = (data.get('saleq',0)/(data.get('atq',0)+1e-8)).pct_change(4,fill_method=None).fillna(0)"}}
-]
-
-**DIVERSITY REQUIREMENT:**
-- Similarity threshold: {sim_thr:.2f}
+**DIVERSITY:**
 - Vary field combinations (don't repeat same pairs)
 - Mix fundamental ratios (70%) with time-series features (30%)
-- Use different denominators and numerators
-- Combine different financial statement items
 
-Remember: Your factors should match the QUALITY and COMPLEXITY of the top-performing factors shown above!
-""".strip()
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  CRITICAL: OUTPUT FORMAT  ⚠️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Output EXACTLY {n} factors in this JSON format:
+
+[
+  {{"code": "data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+  {{"code": "data['factor_score'] = (data['saleq']/(data['atq']+1e-8)).pct_change(4,fill_method=None).fillna(0)"}},
+  {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+]
+
+**CRITICAL RULES:**
+
+1. Each "code" value is a STRING
+2. For TWO-line factors: use \\n for line break (e.g., "line1\\nline2")
+3. For ONE-line factors: just the single line
+4. Use data['field'] format (NOT data.get('field', 0))
+5. Start response with '[' and end with ']'
+6. NO explanations, NO markdown fences, NO extra text
+
+**COMMON MISTAKES TO AVOID:**
+
+❌ WRONG - Syntax error (np.where returns ndarray):
+{{"code": "data['factor_score'] = np.where(data['revtq']==0, 0, data['niq']/data['revtq']).fillna(0)"}}
+
+❌ WRONG - Using data.get():
+{{"code": "data['factor_score'] = np.where(data.get('revtq',0)==0, ...)"}}
+
+❌ WRONG - Missing line break \\n:
+{{"code": "data['factor_score'] = np.where(...) data['factor_score'] = data['factor_score'].fillna(0)"}}
+
+✅ RIGHT - Two lines with \\n:
+{{"code": "data['factor_score'] = np.where(data['revtq']==0, 0, data['niq']/data['revtq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+
+✅ RIGHT - One line with .fillna(0):
+{{"code": "data['factor_score'] = (data['saleq']/data['atq']).rolling(4).mean().shift(1).fillna(0)"}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Now output EXACTLY {n} factors in pure JSON format. Start immediately with '[':""".strip()
     
-
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
     """带超时的 LLM 调用"""
     if not GPT_AVAILABLE:
