@@ -64,9 +64,23 @@ BATCH_SIZE = int(POS_CFG.get("batch_size", 10))
 
 
 def _extract_fields_from_code(code: str) -> List[str]:
-    """提取代码中使用的字段"""
-    fields = re.findall(r"data\.get\(\s*['\"]([^'\"]+)['\"]\s*,", code)
-    return fields
+    """
+    提取代码中使用的字段（兼容两种格式）
+    
+    支持：
+    - data.get('field', 0) 或 data.get("field", 0)
+    - data['field'] 或 data["field"]
+    """
+    fields = []
+    
+    # 格式1: data.get('field', 0)
+    fields.extend(re.findall(r"data\.get\(\s*['\"]([^'\"]+)['\"]\s*,", code))
+    
+    # 格式2: data['field']
+    fields.extend(re.findall(r"data\[['\"]([^'\"]+)['\"]\]", code))
+    
+    # 去重并返回
+    return list(set(fields))
 
 
 def _uses_only_allowed_fields(code: str) -> bool:
