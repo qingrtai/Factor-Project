@@ -30,10 +30,7 @@ logger = logging.getLogger(__name__)
 try:
     from common.column_desc import COLUMN_DESC
     ALLOWED_FIELDS: List[str] = list(COLUMN_DESC.keys())
-    _FIELDS_FOR_PROMPT = (
-        ", ".join(ALLOWED_FIELDS) if len(ALLOWED_FIELDS) <= 160
-        else (", ".join(ALLOWED_FIELDS[:160]) + ", ...")
-    )
+    _FIELDS_FOR_PROMPT = ", ".join(ALLOWED_FIELDS)  # ← 修改这里，删除截断逻辑
 except Exception as e:
     raise ImportError(f"[positive] Unable to import COLUMN_DESC: {e}")
 
