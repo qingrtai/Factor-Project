@@ -233,12 +233,19 @@ class MemoryManager:
         factors = [{"code": item.get("code", "")} for item in raw_negatives]
         
         try:
+            # ========== 修改开始 ========== #
+            # 从全局配置读取 freq_per_year
+            from shared.config_loader import load_global_config
+            g = load_global_config()
+            ppy = int(g.get("freq_per_year", 4))
+            # ========== 修改结束 ========== #
+            
             results_df = batch_evaluate(
                 factors=factors,
                 splits=self.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=4,
+                periods_per_year=ppy,  # ← 改为 ppy（从 4 改为动态读取）
                 id_start=1
             )
         except Exception as e:
