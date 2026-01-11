@@ -2,6 +2,8 @@
 """
 iterative_negative_memory_with_reports 实验配置
 核心特点：在负向记忆基础上，使用 factor_report 代替 train_score
+
+FIXED: NEGATIVE_SAMPLES_COUNT = 3 (was 5)
 """
 
 from shared.paths import results_dir
@@ -15,7 +17,7 @@ from pathlib import Path
 MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
 FACTORS_PER_ROUND = 10            # 每轮生成因子数
-NEGATIVE_SAMPLES_COUNT = 5        # 每轮生成负样本数（减少到5个，更精准）
+NEGATIVE_SAMPLES_COUNT = 3        # ← FIXED: 改为3（was 5）
 MAX_GENERATION_ATTEMPTS = 8       # 每轮最大生成尝试次数
 
 # =============================================================================
