@@ -30,6 +30,8 @@ from core.factor_evaluator import batch_evaluate
 from reports.report_builder import generate_factor_report, FactorMetrics
 
 
+
+
 class FactorIterator:
     """
     因子迭代器（负记忆 + 报告版本）
@@ -51,6 +53,12 @@ class FactorIterator:
         self.factors_per_round = FACTORS_PER_ROUND
         self.negative_count = NEGATIVE_SAMPLES_COUNT
         self.max_attempts = MAX_GENERATION_ATTEMPTS
+
+        # __init__ 中添加（第 52-54 行）
+        from shared.config_loader import load_global_config
+        g = load_global_config()
+        self.periods_per_year = int(g.get("freq_per_year", 4))
+        self.logger.info(f"  - Periods per year: {self.periods_per_year}")
         
         # 统计信息
         self.total_factors_generated = 0
@@ -257,7 +265,7 @@ class FactorIterator:
                 splits=self.memory_manager.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=4
+                periods_per_year=self.periods_per_year  # ← FIXED
             )
             
             return df
