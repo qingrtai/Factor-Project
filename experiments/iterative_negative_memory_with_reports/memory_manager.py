@@ -2,16 +2,17 @@
 """
 Memory Manager WITH REPORTS
 
-核心改动 vs iterative_negative_memory:
-1. 记忆字段: ["code", "factor_report"] 而非 ["code", "train_score"]
-2. 负样本生成: 调用 NegativeAgent 生成代码 + 报告
-3. combine_memory 只保留 code + factor_report + memory_type
+FIXED VERSION:
+1. Added periods_per_year configuration reading
+2. Use self.periods_per_year in batch_evaluate() call
+3. Simplified memory strategy (100% baseline -> 100% previous round)
 """
 
 import os
 import logging
 from typing import List, Dict, Optional, Any
 import pandas as pd
+import numpy as np
 
 # 配置导入
 from .config import (
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class MemoryManager:
     """
-    记忆管理器（with reports）
+    记忆管理器（with reports + FIXED）
     
     职责：
     1. 加载上一轮 Top10（包含 factor_report）
@@ -54,6 +55,10 @@ class MemoryManager:
         # 加载全局配置
         g = load_global_config()
         
+        # ========== FIXED: 保存 periods_per_year ========== #
+        self.periods_per_year = int(g.get("freq_per_year", 4))
+        # ================================================== #
+        
         # 一次性加载数据切分
         self.logger.info("加载数据切分...")
         self.splits = load_splits(
@@ -64,6 +69,7 @@ class MemoryManager:
             ret_col=g["schema"]["ret_col"]
         )
         self.logger.info("数据切分加载完成")
+        self.logger.info(f"Periods per year: {self.periods_per_year}")  # ← 新增日志
         
         # 初始化负向代理
         self.neg_agent = NegativeAgent(logger=self.logger)
@@ -72,41 +78,73 @@ class MemoryManager:
     
     def get_memory_for_round(self, round_num: int) -> List[Dict]:
         """
-        返回上一轮的 Top10 因子（包含完整记录）
+        返回上一轮的 Top10 因子（FIXED: 简化策略）
         
-        **关键改动**：按 train_score 排序（避免泄露 val_score）
+        策略：
+        - Round 1: 100% baseline (Top 10)
+        - Round 2+: 100% previous round (Top 10)
         """
-        # 确定源文件
-        if round_num <= 1:
+        # ========== Round 1: 100% baseline ========== #
+        if round_num == 1:
             csv_path = BASELINE_FILE
-        else:
-            csv_path = os.path.join(RESULTS_DIR, f"round_{round_num-1}_factor_metrics.csv")
+            
+            if not os.path.exists(csv_path):
+                raise FileNotFoundError(f"Baseline not found: {csv_path}")
+            
+            df = pd.read_csv(csv_path)
+            
+            # 确保有 factor_report 列
+            if "factor_report" not in df.columns:
+                self.logger.warning(f"[memory] Baseline 缺少 factor_report 列，使用空字符串")
+                df["factor_report"] = ""
+            
+            # 按 train_score 排序
+            df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
+            top10 = df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            
+            positives = top10.to_dict(orient="records")
+            
+            self.logger.info(
+                f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本"
+            )
+            if len(top10) > 0:
+                train_range = f"[{top10['train_score'].min():.4f}, {top10['train_score'].max():.4f}]"
+                self.logger.info(f"  - Train score 范围: {train_range}")
+            
+            return positives
         
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"Memory source not found: {csv_path}")
+        # ========== Round 2+: 100% previous round ========== #
+        prev_path = os.path.join(RESULTS_DIR, f"round_{round_num-1}_factor_metrics.csv")
         
-        # 读取 CSV
-        df = pd.read_csv(csv_path)
+        if not os.path.exists(prev_path):
+            raise FileNotFoundError(f"Round {round_num}: 上一轮结果不存在: {prev_path}")
         
-        # 确保有 factor_report 列
-        if "factor_report" not in df.columns:
-            self.logger.warning(f"[memory] {csv_path} 缺少 factor_report 列，使用空字符串")
-            df["factor_report"] = ""
-        
-        # ========== 关键改动：按 train_score 排序 ========== #
-        df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
-        top10 = df.sort_values("train_score", ascending=False, na_position="last").head(10)  # ← 用 train_score
+        try:
+            prev_df = pd.read_csv(prev_path)
+            
+            # 确保有 factor_report 列
+            if "factor_report" not in prev_df.columns:
+                self.logger.warning(f"[memory] Round {round_num-1} 缺少 factor_report 列，使用空字符串")
+                prev_df["factor_report"] = ""
+            
+            # 按 train_score 排序
+            prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
+            top10 = prev_df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            
+        except Exception as e:
+            raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
         
         positives = top10.to_dict(orient="records")
         
         self.logger.info(
-            f"[memory] Round {round_num} 加载了 {len(positives)} 个正样本 "
-            f"(来自 {'baseline' if round_num <= 1 else f'round {round_num-1}'})"
+            f"[memory] Round {round_num} 使用 100% round {round_num-1}: {len(positives)} 个正样本"
         )
-        if len(top10) > 0:
-            # 日志可以显示 train_score 范围（不是 val_score）
-            train_range = f"[{top10['train_score'].min():.4f}, {top10['train_score'].max():.4f}]"
+        
+        if len(positives) > 0:
+            train_scores = [float(p.get("train_score", 0)) for p in positives]
+            train_range = f"[{min(train_scores):.4f}, {max(train_scores):.4f}]"
             self.logger.info(f"  - Train score 范围: {train_range}")
+            self.logger.info(f"  - Train score 均值: {np.mean(train_scores):.4f}")
         
         return positives
     
@@ -115,7 +153,7 @@ class MemoryManager:
     def get_worst_factors_with_reports(
         self,
         round_num: int,
-        n: int = 2,
+        n: int = 3,  # ← FIXED: default 改为 3
         positives_for_context: Optional[List[Dict]] = None,
     ) -> List[Dict]:
         """
@@ -153,14 +191,16 @@ class MemoryManager:
         factors = [{"code": item.get("code", "")} for item in raw_negatives]
         
         try:
+            # ========== FIXED: 使用 self.periods_per_year ========== #
             results_df = batch_evaluate(
                 factors=factors,
                 splits=self.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=4,
+                periods_per_year=self.periods_per_year,  # ← FIXED
                 id_start=1
             )
+            # ==================================================== #
         except Exception as e:
             self.logger.error(f"[memory] 负样本评估失败: {e}")
             return []
@@ -231,11 +271,16 @@ class MemoryManager:
         
         # 统计
         val_scores = pd.to_numeric(df.get("val_score", pd.Series(dtype=float)), errors="coerce").dropna()
+        train_scores = pd.to_numeric(df.get("train_score", pd.Series(dtype=float)), errors="coerce").dropna()
         
         self.logger.info(f"[memory] Round {round_num} 已保存: {path}")
         if len(val_scores) > 0:
             self.logger.info(
                 f"  - Val scores: mean={val_scores.mean():.4f}, max={val_scores.max():.4f}"
+            )
+        if len(train_scores) > 0:
+            self.logger.info(
+                f"  - Train scores: mean={train_scores.mean():.4f}, max={train_scores.max():.4f}"
             )
         
         return path
