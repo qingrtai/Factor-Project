@@ -64,6 +64,12 @@ class FactorIterator:
         self.factors_per_round = FACTORS_PER_ROUND
         self.negative_count = NEGATIVE_SAMPLES_COUNT
         self.max_attempts = MAX_GENERATION_ATTEMPTS
+
+        # ========== 新增：从全局配置读取 periods_per_year ========== #
+        from shared.config_loader import load_global_config
+        g = load_global_config()
+        self.periods_per_year = int(g.get("freq_per_year", 4))
+        # ========================================================== #
         
         # 统计信息
         self.total_factors_generated = 0
@@ -73,6 +79,7 @@ class FactorIterator:
         self.logger.info(f"  - Factors per round: {self.factors_per_round}")
         self.logger.info(f"  - Negative samples: {self.negative_count}")
         self.logger.info(f"  - Max generation attempts: {self.max_attempts}")
+        self.logger.info(f"  - Periods per year: {self.periods_per_year}")  # ← 新增日志
     
     # ========== 主流程 ========== #
     
@@ -277,20 +284,15 @@ class FactorIterator:
             return None
         
         try:
-            # 从全局配置读取 freq_per_year
-            from shared.config_loader import load_global_config
-            g = load_global_config()
-            ppy = int(g.get("freq_per_year", 4))  # ← 添加这行
-            
-            # 调用 core/factor_evaluator.py 的 batch_evaluate
+            # ========== 修改：使用实例变量 ========== #
             df = batch_evaluate(
                 factors=factors,
                 splits=self.memory_manager.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=ppy  # ← 改为 ppy
+                periods_per_year=self.periods_per_year  # ← 改为使用实例变量
             )
-            
+            # ======================================== #
             return df
             
         except Exception as e:
