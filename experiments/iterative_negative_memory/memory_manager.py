@@ -44,6 +44,9 @@ class MemoryManager:
         os.makedirs(RESULTS_DIR, exist_ok=True)
         
         g = load_global_config()
+      # ========== 新增：保存 periods_per_year ========== #
+        self.periods_per_year = int(g.get("freq_per_year", 4))
+        # ============================================== #
         
         self.logger.info("加载数据切分...")
         self.splits = load_splits(
@@ -54,6 +57,7 @@ class MemoryManager:
             ret_col=g["schema"]["ret_col"]
         )
         self.logger.info("数据切分加载完成")
+        self.logger.info(f"Periods per year: {self.periods_per_year}")  # ← 新增日志
         
         self.neg_agent = NegativeAgent(logger=self.logger)
 
@@ -233,21 +237,16 @@ class MemoryManager:
         factors = [{"code": item.get("code", "")} for item in raw_negatives]
         
         try:
-            # ========== 修改开始 ========== #
-            # 从全局配置读取 freq_per_year
-            from shared.config_loader import load_global_config
-            g = load_global_config()
-            ppy = int(g.get("freq_per_year", 4))
-            # ========== 修改结束 ========== #
-            
+            # ========== 修改：使用实例变量 ========== #
             results_df = batch_evaluate(
                 factors=factors,
                 splits=self.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=ppy,  # ← 改为 ppy（从 4 改为动态读取）
+                periods_per_year=self.periods_per_year,  # ← 改为使用实例变量
                 id_start=1
             )
+            # ======================================== #
         except Exception as e:
             self.logger.error(f"[memory] 负样本评估失败: {e}")
             return []
