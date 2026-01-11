@@ -273,28 +273,22 @@ class FactorIterator:
         return final
     
     def _evaluate_factors(self, factors: List[Dict[str, Any]]) -> Optional[pd.DataFrame]:
-        """
-        评估因子列表
-        
-        直接调用 memory_manager 的 splits 和 batch_evaluate
-        
-        Args:
-            factors: [{"code": ..., "factor_id": ...}, ...]
-        
-        Returns:
-            评估结果 DataFrame（标准列）
-        """
         if not factors:
             return None
         
         try:
+            # 从全局配置读取 freq_per_year
+            from shared.config_loader import load_global_config
+            g = load_global_config()
+            ppy = int(g.get("freq_per_year", 4))  # ← 添加这行
+            
             # 调用 core/factor_evaluator.py 的 batch_evaluate
             df = batch_evaluate(
                 factors=factors,
                 splits=self.memory_manager.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=4
+                periods_per_year=ppy  # ← 改为 ppy
             )
             
             return df
