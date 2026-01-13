@@ -1,11 +1,4 @@
-# reports/report_builder.py (IMPROVED - 适配版)
-
-"""
-改进策略：
-1. 保持所有现有函数接口不变
-2. 只改进 report_template.txt 的内容
-3. 在 build_report_prompt 中增强 prompt 构建
-"""
+# reports/report_builder.py (Improved Version)
 
 from __future__ import annotations
 
@@ -18,7 +11,7 @@ from common.gpt_runner import call_gpt
 
 # 默认值
 REPORT_TEMPLATE_FILE = Path(__file__).parent / "report_template.txt"
-REPORT_MAX_TOKENS = 600  # 保持不变
+REPORT_MAX_TOKENS = 600  # 增加到 600
 TEMPERATURE = 0.7
 LOGS_DIR = Path(__file__).resolve().parents[1] / "results" / "logs"
 
@@ -33,6 +26,7 @@ class FactorMetrics:
     train_score: Optional[float] = None
     val_score: Optional[float] = None
     style_hint: Optional[str] = None
+    # 新增：排名信息（帮助 GPT 理解相对表现）
     rank: Optional[int] = None
     total_factors: Optional[int] = None
 
@@ -79,7 +73,7 @@ def _format_metrics_table(m: FactorMetrics) -> str:
     """Return a compact text table with metrics."""
     rows: List[str] = []
     
-    # 排名信息
+    # 排名信息（新增）
     if m.rank is not None and m.total_factors is not None:
         rank_pct = (m.rank / m.total_factors) * 100
         rank_tier = "TOP" if rank_pct <= 30 else "MIDDLE" if rank_pct <= 70 else "BOTTOM"
@@ -117,6 +111,7 @@ def _infer_style_from_code(code: str) -> str:
     """Simple heuristic to infer factor style from code."""
     code_lower = code.lower()
     
+    # 关键词映射
     if any(k in code_lower for k in ['niq', 'profit', 'earnings', 'ebit']):
         return "profitability"
     elif any(k in code_lower for k in ['revt', 'sale', 'revenue', 'growth']):
@@ -135,8 +130,6 @@ def _infer_style_from_code(code: str) -> str:
         return "mixed"
 
 
-# ========== 关键改进：增强版 Prompt 构建 ========== #
-
 def build_report_prompt(
     code: str,
     metrics: FactorMetrics,
@@ -145,13 +138,7 @@ def build_report_prompt(
     max_code_chars: int = 800,
     is_detailed: bool = True,
 ) -> str:
-    """
-    Assemble a prompt for GPT to produce a factor report.
-    
-    ========== 改进点 ========== 
-    1. 结构化模板（5 部分正样本，4 部分负样本）
-    2. 明确要求（具体字数、格式）
-    3. 强调可操作性
+    """Assemble a prompt for GPT to produce a factor report.
     
     Args:
         is_detailed: If False, generate a brief negative-example report
@@ -164,9 +151,9 @@ def build_report_prompt(
         metrics.style_hint = _infer_style_from_code(code)
     
     if is_detailed:
-        # ========== 改进版：详细报告（正样本）========== #
+        # 详细报告（用于好的因子）
         parts = [
-            "=== TASK: Generate a STRUCTURED factor analysis report ===",
+            "=== TASK: Generate a DETAILED factor analysis report ===",
             "",
             "CODE:",
             code_snippet,
@@ -174,53 +161,15 @@ def build_report_prompt(
             "METRICS:",
             metrics_table,
             "",
-            "=== OUTPUT REQUIREMENTS ===",
+            "INSTRUCTIONS:",
+            template_text.strip(),
             "",
-            "Write a 350-400 word analysis with EXACTLY these 5 sections:",
-            "",
-            "**1. ECONOMIC LOGIC**",
-            "What financial relationship does this factor capture?",
-            "Why should it predict stock returns?",
-            "Example: \"Captures profitability efficiency by combining operating income with asset utilization\"",
-            "",
-            "**2. TECHNICAL IMPLEMENTATION**",
-            "How is it calculated? What transformations are used?",
-            "Why this specific formula design?",
-            "Example: \"Uses cross-sectional ranking to normalize, applies pct_change for momentum signal\"",
-            "",
-            "**3. PERFORMANCE ANALYSIS**",
-            f"Interpret the metrics: Sharpe {metrics.sharpe if metrics.sharpe else 'N/A'}, ",
-            f"Return/Drawdown tradeoff, Coverage {metrics.coverage if metrics.coverage else 'N/A'}",
-            "Example: \"Strong Sharpe 2.0+ indicates stable risk-adjusted returns with moderate 30% drawdown\"",
-            "",
-            "**4. SUCCESS FACTORS**",
-            "List 2-3 SPECIFIC reasons why this factor works.",
-            "What are its technical or economic advantages?",
-            "Example: \"1) Robust ratio handles outliers 2) Combines growth + quality 3) Adequate 70% coverage\"",
-            "",
-            "**5. IMPROVEMENT DIRECTIONS**",
-            "Suggest SPECIFIC variations to try:",
-            "- Different field ratios or combinations",
-            "- Alternative time windows or smoothing",
-            "- Additional normalizations",
-            "Example: \"Try longer 8-quarter rolling windows; add debt/equity ratio; test geometric vs arithmetic mean\"",
-            "",
-            "=== FORMAT REQUIREMENTS ===",
-            "- Use section headers EXACTLY as shown above",
-            "- Each section 2-4 sentences (not a single long paragraph)",
-            "- Be SPECIFIC and CONCRETE (avoid generic statements)",
-            "- Focus on ACTIONABLE insights that help generate better factors",
-            "- Total 350-400 words",
-            "- Plain text only (no markdown formatting)",
-            "",
-            "=== CRITICAL NOTES ===",
-            "Your report will be used to teach the next round of factor generation.",
-            "Extract insights that can be APPLIED, not just observed.",
+            "Focus on extracting ACTIONABLE insights that will help generate BETTER factors next round.",
         ]
     else:
-        # ========== 改进版：简要报告（负样本）========== #
+        # 简要报告（用于差的因子，作为负例）
         parts = [
-            "=== TASK: Generate a STRUCTURED negative-example report ===",
+            "=== TASK: Generate a BRIEF negative-example report ===",
             "",
             "CODE:",
             code_snippet,
@@ -228,39 +177,15 @@ def build_report_prompt(
             "METRICS:",
             metrics_table,
             "",
-            "This is a POOR-performing factor. Write a 250-300 word analysis with EXACTLY these 4 sections:",
+            "This is a POOR-performing factor. Write a brief report (50-80 words) explaining:",
+            "1. What went wrong (cite 1-2 specific issues)",
+            "2. What to AVOID doing in future factors",
             "",
-            "**1. CORE FLAW**",
-            "What is fundamentally wrong with this factor's design? (1-2 sentences)",
-            "",
-            "**2. SPECIFIC PROBLEMS**",
-            "List 3-4 concrete issues:",
-            "- Economic logic problem (if any)",
-            "- Statistical or technical flaw",
-            "- Data quality concern",
-            "- Why it fails on validation",
-            "",
-            "**3. EXPECTED FAILURES**",
-            "Explain WHY (not just THAT) it will fail:",
-            f"- Low Sharpe {metrics.sharpe if metrics.sharpe else 'N/A'}: why?",
-            f"- High drawdown {metrics.max_dd if metrics.max_dd else 'N/A'}: why?",
-            f"- Poor coverage {metrics.coverage if metrics.coverage else 'N/A'}: why?",
-            "",
-            "**4. CORRECT APPROACH**",
-            "How should this concept be implemented properly? Give SPECIFIC fixes.",
-            "Example: \"Should use rank() for normalization, add np.where() for zero handling, combine with quality screen\"",
-            "",
-            "=== FORMAT REQUIREMENTS ===",
-            "- Use section headers EXACTLY as shown",
-            "- Be SPECIFIC about WHY it fails (root cause analysis)",
-            "- Total 250-300 words",
-            "- Plain text only",
+            "Be concise and focus on the key mistakes to learn from.",
         ]
     
     return "\n".join(parts)
 
-
-# ========== 保持原函数不变 ========== #
 
 def generate_factor_report(
     code: str,
@@ -278,28 +203,27 @@ def generate_factor_report(
     Args:
         is_detailed: If True, generate detailed report; if False, brief negative-example report
     """
-    # ========== 改进点：不再使用外部模板文件 ========== #
-    # 直接使用增强版的 build_report_prompt
+    t_path = template_path or REPORT_TEMPLATE_FILE
+    try:
+        template_text = _read_text(t_path)
+    except Exception:
+        template_text = (
+            "Write a concise factor report. Use only provided facts. "
+            "Sections: Performance Summary; Key Strength; Critical Weakness; Actionable Improvements."
+        )
     
     prompt = build_report_prompt(
         code=code, 
         metrics=metrics, 
-        template_text="",  # 不再需要模板
+        template_text=template_text,
         is_detailed=is_detailed
     )
     
     raw_resp = ""
     try:
-        # ========== 改进点：调整温度和 tokens ========== #
-        # 详细报告用稍低温度（提高准确性），更多 tokens
-        if is_detailed:
-            actual_temp = 0.60  # 从 0.70 降低到 0.60
-            actual_max_tokens = 1000  # 从 600 增加到 1000
-        else:
-            actual_temp = 0.70
-            actual_max_tokens = 700  # 从 300 增加到 700
-        
-        raw_resp = call_gpt(prompt, temperature=actual_temp, max_tokens=actual_max_tokens)
+        # 简要报告用更少的 tokens
+        actual_max_tokens = max_tokens if is_detailed else max(max_tokens // 2, 200)
+        raw_resp = call_gpt(prompt, temperature=temperature, max_tokens=actual_max_tokens)
         report = (raw_resp or "").strip()
     except Exception as e:
         if is_detailed:
@@ -354,6 +278,7 @@ def generate_comparative_summary(
     if not top_factors:
         return ""
     
+    # 简单的对比总结
     avg_top_sharpe = sum(m.sharpe for _, m, _ in top_factors if m.sharpe) / len(top_factors)
     avg_bottom_sharpe = sum(m.sharpe for _, m, _ in bottom_factors if m.sharpe) / len(bottom_factors) if bottom_factors else 0
     
@@ -376,6 +301,7 @@ def _extract_common_patterns(codes: List[str]) -> str:
     if not codes:
         return "N/A"
     
+    # 简单的关键词频率分析
     keywords = ['pct_change', 'rolling', 'rank', 'fillna', 'shift', 'diff', 
                 'revtq', 'saleq', 'cogsq', 'niq', 'atq']
     
