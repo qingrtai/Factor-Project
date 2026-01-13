@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""
+诊断脚本 - 测试 MemoryManager 初始化的各个步骤
+"""
+
+import sys
+import time
+import logging
+from pathlib import Path
+
+# 添加项目根目录
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# 设置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger = logging.getLogger('diagnostic')
+
+
+def test_step(step_name, func):
+    """测试单个步骤"""
+    logger.info(f"\n{'='*60}")
+    logger.info(f"测试步骤: {step_name}")
+    logger.info(f"{'='*60}")
+    
+    start = time.time()
+    try:
+        result = func()
+        duration = time.time() - start
+        logger.info(f"✓ {step_name} 完成 ({duration:.2f}s)")
+        return True, result
+    except Exception as e:
+        duration = time.time() - start
+        logger.error(f"✗ {step_name} 失败 ({duration:.2f}s)")
+        logger.error(f"  错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None
+
+
+def main():
+    """主函数"""
+    logger.info("开始诊断 iterative_negative_memory_with_reports 初始化问题")
+    
+    # Step 1: 测试配置导入
+    def test_config():
+        from experiments.iterative_negative_memory_with_reports.config import (
+            CONFIG, BASELINE_FILE, RESULTS_DIR
+        )
+        logger.info(f"  - BASELINE_FILE: {BASELINE_FILE}")
+        logger.info(f"  - RESULTS_DIR: {RESULTS_DIR}")
+        logger.info(f"  - BASELINE exists: {BASELINE_FILE.exists()}")
+        return CONFIG
+    
+    success, config = test_step("1. 导入配置", test_config)
+    if not success:
+        logger.error("配置导入失败，停止诊断")
+        return 1
+    
+    # Step 2: 测试全局配置
+    def test_global_config():
+        from shared.config_loader import load_global_config
+        g = load_global_config()
+        logger.info(f"  - Data file: {g.get('data', {}).get('raw_file', 'N/A')}")
+        logger.info(f"  - Date col: {g.get('schema', {}).get('date_col', 'N/A')}")
+        logger.info(f"  - Years: {g.get('years', {})}")
+        logger.info(f"  - Freq per year: {g.get('freq_per_year', 4)}")
+        
+        # 检查数据文件是否存在
+        data_file = g.get('data', {}).get('raw_file')
+        if data_file and Path(data_file).exists():
+            logger.info(f"  - Data file exists: ✓")
+            # 检查文件大小
+            size_mb = Path(data_file).stat().st_size / (1024 * 1024)
+            logger.info(f"  - Data file size: {size_mb:.2f} MB")
+        else:
+            logger.warning(f"  - Data file exists: ✗ ({data_file})")
+        
+        return g
+    
+    success, g = test_step("2. 加载全局配置", test_global_config)
+    if not success:
+        logger.error("全局配置加载失败，停止诊断")
+        return 1
+    
+    # Step 3: 测试数据加载（这是最可能卡住的地方）
+    def test_load_splits():
+        from core.data_loader import load_splits
+        
+        logger.info("  开始加载数据切分（这可能需要 1-3 分钟）...")
+        logger.info("  请耐心等待...")
+        
+        splits = load_splits(
+            raw_csv=g["data"]["raw_file"],
+            date_col=g["schema"]["date_col"],
+            years=g["years"],
+            id_col=g["schema"]["id_col"],
+            ret_col=g["schema"]["ret_col"]
+        )
+        
+        # 打印统计信息
+        if splits:
+            logger.info(f"  - Train size: {len(splits.get('train', []))} rows")
+            logger.info(f"  - Val size: {len(splits.get('val', []))} rows")
+        
+        return splits
+    
+    success, splits = test_step("3. 加载数据切分", test_load_splits)
+    if not success:
+        logger.error("数据切分加载失败")
+        logger.error("\n可能的原因:")
+        logger.error("  1. 数据文件不存在或路径错误")
+        logger.error("  2. 数据文件格式错误")
+        logger.error("  3. 内存不足（数据文件太大）")
+        logger.error("  4. 配置中的 date_col, id_col, ret_col 错误")
+        return 1
+    
+    # Step 4: 测试 NegativeAgent 初始化
+    def test_negative_agent():
+        from experiments.iterative_negative_memory_with_reports.negative_agents_reports import NegativeAgent
+        agent = NegativeAgent(logger=logger)
+        return agent
+    
+    success, neg_agent = test_step("4. 初始化 NegativeAgent", test_negative_agent)
+    if not success:
+        logger.error("NegativeAgent 初始化失败")
+        return 1
+    
+    # Step 5: 测试完整 MemoryManager 初始化（如果前面都成功）
+    def test_memory_manager():
+        from experiments.iterative_negative_memory_with_reports.memory_manager import MemoryManager
+        mm = MemoryManager()
+        return mm
+    
+    success, mm = test_step("5. 初始化 MemoryManager", test_memory_manager)
+    if not success:
+        logger.error("MemoryManager 初始化失败")
+        return 1
+    
+    # Step 6: 测试 PositiveAgents 初始化
+    def test_positive_agents():
+        from experiments.iterative_negative_memory_with_reports.positive_agents_reports import PositiveAgents
+        agents = PositiveAgents()
+        return agents
+    
+    success, pos_agents = test_step("6. 初始化 PositiveAgents", test_positive_agents)
+    if not success:
+        logger.error("PositiveAgents 初始化失败")
+        return 1
+    
+    # Step 7: 测试完整 Iterator 初始化
+    def test_iterator():
+        from experiments.iterative_negative_memory_with_reports.iterator import FactorIterator
+        iterator = FactorIterator()
+        return iterator
+    
+    success, iterator = test_step("7. 初始化 FactorIterator", test_iterator)
+    if not success:
+        logger.error("FactorIterator 初始化失败")
+        return 1
+    
+    # 全部成功
+    logger.info("\n" + "="*60)
+    logger.info("✓ 所有初始化步骤完成！")
+    logger.info("="*60)
+    logger.info("\n实验应该可以正常运行了。")
+    logger.info("如果仍然卡住，请检查:")
+    logger.info("  1. GPT API 是否可用（检查网络和 API key）")
+    logger.info("  2. 硬盘空间是否充足")
+    logger.info("  3. 是否有其他进程占用数据文件")
+    
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
