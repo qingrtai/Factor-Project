@@ -3,7 +3,7 @@
 """
 aggregator_reports.py — Generate round_summary_mean.csv
 
-FIXED VERSION - 对齐 iterative_negative_memory 格式:
+FIXED VERSION - 对齐简化格式:
 - 列名：round (不是 round_num)
 - 只保留平均值（不要 _mean, _max, _min, _std 后缀）
 - 去掉 factors_count, success_count, success_rate
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class ResultsAggregator:
-    """结果聚合器（对齐 iterative_negative_memory 格式）"""
+    """结果聚合器（简化格式版）"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ class ResultsAggregator:
         # 按 round 排序
         summary_df = summary_df.sort_values("round")
         
-        # ========== FIXED: 确保列顺序（对齐 iterative_negative_memory）========== #
+        # ========== FIXED: 确保列顺序 ========== #
         key_cols = [
             "round",              # ← 改为 round（不是 round_num）
             "train_score",        # ← 只保留平均值（不要 _mean 后缀）
@@ -189,3 +189,37 @@ class ResultsAggregator:
             self.logger.info("\n" + display_df.to_string(index=False))
         
         self.logger.info("=" * 80 + "\n")
+
+
+# ========== 独立运行入口 ========== #
+
+def main():
+    """独立运行 aggregator（手动聚合）"""
+    import sys
+    from pathlib import Path
+    
+    # 添加项目根目录到 sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    
+    # 设置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # 执行聚合
+    aggregator = ResultsAggregator()
+    
+    # 生成 round_summary_mean.csv
+    summary_path = aggregator.generate_round_summary()
+    
+    if summary_path:
+        print(f"\n✓ 成功生成: {summary_path}")
+    else:
+        print("✗ 聚合失败（无数据）")
+
+
+if __name__ == "__main__":
+    main()
