@@ -3,10 +3,10 @@
 """
 aggregator_reports.py — Generate round_summary_mean.csv
 
-FIXED VERSION:
-- 修复列名：round -> round_num
-- 添加 factors_count, success_count, success_rate
-- 指标后缀统一为 _mean, _max, _min, _std
+FIXED VERSION - 对齐 iterative_negative_memory 格式:
+- 列名：round (不是 round_num)
+- 只保留平均值（不要 _mean, _max, _min, _std 后缀）
+- 去掉 factors_count, success_count, success_rate
 """
 
 import os
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class ResultsAggregator:
-    """结果聚合器（FIXED 格式）"""
+    """结果聚合器（对齐 iterative_negative_memory 格式）"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class ResultsAggregator:
         self.baseline_file = BASELINE_FILE
     
     def generate_round_summary(self) -> str:
-        """生成 round_summary_mean.csv (FIXED 格式)"""
+        """生成 round_summary_mean.csv (简化格式)"""
         self.logger.info("[aggregator] 开始生成 round_summary_mean.csv...")
         
         all_rounds_data = []
@@ -76,22 +76,23 @@ class ResultsAggregator:
         # ========== 生成 DataFrame ========== #
         summary_df = pd.DataFrame(all_rounds_data)
         
-        # FIXED: 按 round_num 排序（不是 round）
-        summary_df = summary_df.sort_values("round_num")
+        # 按 round 排序
+        summary_df = summary_df.sort_values("round")
         
-        # FIXED: 确保列顺序
+        # ========== FIXED: 确保列顺序（对齐 iterative_negative_memory）========== #
         key_cols = [
-            "round_num",           # ← FIXED (was "round")
-            "factors_count",       # ← FIXED 添加
-            "success_count",       # ← FIXED 添加
-            "success_rate",        # ← FIXED 添加
-            "train_score_mean", "train_score_max", "train_score_min", "train_score_std",
-            "val_score_mean", "val_score_max", "val_score_min", "val_score_std",
-            "val_sharpe_mean", "val_sharpe_max", "val_sharpe_min", "val_sharpe_std",
-            "val_ann_ret_mean", "val_ann_ret_max", "val_ann_ret_min", "val_ann_ret_std",
-            "val_D_mean", "val_D_max", "val_D_min", "val_D_std",
-            "val_max_dd_mean", "val_max_dd_max", "val_max_dd_min", "val_max_dd_std",
-            "val_coverage_mean", "val_coverage_max", "val_coverage_min", "val_coverage_std",
+            "round",              # ← 改为 round（不是 round_num）
+            "train_score",        # ← 只保留平均值（不要 _mean 后缀）
+            "val_score",
+            "val_coverage",
+            "val_ann_ret",
+            "val_sharpe",
+            "val_max_dd",
+            "val_D",
+            # 可选指标（如果有的话）
+            "val_diversity",
+            "val_autocorr",
+            "val_skew",
         ]
         
         # 保留存在的列
@@ -115,7 +116,15 @@ class ResultsAggregator:
         round_num: int
     ) -> Optional[Dict[str, Any]]:
         """
-        计算单轮统计指标（FIXED 格式）
+        计算单轮统计指标（简化格式）
+        
+        返回格式：
+        {
+            "round": 0,
+            "train_score": 0.28,  # 平均值
+            "val_score": 1.94,    # 平均值
+            ...
+        }
         """
         if not os.path.exists(csv_path):
             return None
@@ -125,30 +134,24 @@ class ResultsAggregator:
         if df.empty:
             return None
         
-        # ========== FIXED: 基础统计 ========== #
+        # ========== FIXED: 基础统计（只保留 round）========== #
         stats = {
-            "round_num": round_num,  # ← FIXED (was "round")
-            "factors_count": len(df),  # ← FIXED 添加
+            "round": round_num,  # ← 改为 round
         }
         
-        # FIXED: 成功率统计
-        if "status" in df.columns:
-            success = (df["status"] == "success").sum()
-            stats["success_count"] = int(success)  # ← FIXED 添加
-            stats["success_rate"] = float(success / len(df)) if len(df) > 0 else 0.0
-        else:
-            stats["success_count"] = len(df)  # ← FIXED 添加
-            stats["success_rate"] = 1.0
-        
-        # ========== FIXED: 指标统计 ========== #
+        # ========== FIXED: 指标统计（只计算平均值）========== #
         metrics_to_aggregate = [
-            "train_score",   # ← FIXED 添加
+            "train_score",
             "val_score", 
             "val_sharpe", 
             "val_ann_ret", 
             "val_D",
             "val_max_dd",
             "val_coverage",
+            # 可选指标
+            "val_diversity",
+            "val_autocorr",
+            "val_skew",
         ]
         
         for metric in metrics_to_aggregate:
@@ -161,41 +164,26 @@ class ResultsAggregator:
             if len(values) == 0:
                 continue
             
-            # FIXED: 计算统计量（添加 _mean, _max, _min, _std 后缀）
-            stats[f"{metric}_mean"] = float(values.mean())
-            stats[f"{metric}_max"] = float(values.max())
-            stats[f"{metric}_min"] = float(values.min())
-            stats[f"{metric}_std"] = float(values.std()) if len(values) > 1 else 0.0
+            # FIXED: 只保留平均值（不要 _mean 后缀）
+            stats[metric] = float(values.mean())
         
         return stats
     
     def _print_summary(self, summary_df: pd.DataFrame) -> None:
         """打印汇总表格"""
         self.logger.info("\n" + "=" * 80)
-        self.logger.info("Round Summary (FIXED 格式)")
+        self.logger.info("Round Summary (简化格式)")
         self.logger.info("=" * 80)
         
-        key_cols = [
-            "round_num",  # ← FIXED
-            "factors_count",  # ← FIXED
-            "success_rate",
-            "val_score_mean", 
-            "val_score_max",
-            "val_sharpe_mean",
-            "val_sharpe_max"
-        ]
+        # 显示所有列
+        display_cols = list(summary_df.columns)
         
-        available_cols = [c for c in key_cols if c in summary_df.columns]
-        
-        if available_cols:
-            display_df = summary_df[available_cols].copy()
+        if display_cols:
+            display_df = summary_df.copy()
             
-            # 格式化
-            if "success_rate" in display_df.columns:
-                display_df["success_rate"] = display_df["success_rate"].apply(lambda x: f"{x:.1%}")
-            
+            # 格式化数值列
             for col in display_df.columns:
-                if col.startswith("val_") or col.startswith("train_"):
+                if col != "round":
                     display_df[col] = display_df[col].apply(lambda x: f"{x:.4f}")
             
             self.logger.info("\n" + display_df.to_string(index=False))
