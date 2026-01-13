@@ -339,8 +339,6 @@ class PositiveAgents:  # ← 类名改为复数
 
         return codes[:target_n]
 
-    
-
     # ================= Prompt 构造 =================
     def _whitelist_block(self) -> str:
         if not self.field_whitelist:
@@ -351,245 +349,6 @@ class PositiveAgents:  # ← 类名改为复数
             f"{cols}\n"
             f"... ({len(self.field_whitelist)} total)\n\n"
         )
-
-    
-    # ========== 方法 1: 深度提取经济逻辑 ========== #
-    
-    def _extract_economic_logic_deep(self, report: str) -> str:
-        """
-        深度提取经济逻辑（按结构提取）
-        
-        优先级：
-        1. 按 "ECONOMIC LOGIC" 部分标题提取
-        2. Fallback 到关键词匹配
-        3. 最后返回报告前 200 字符
-        """
-        if not report:
-            return ""
-        
-        lines = report.split('\n')
-        
-        # 方法 1: 按部分标题提取
-        logic_lines = []
-        in_section = False
-        
-        for line in lines:
-            upper = line.upper()
-            
-            # 进入 ECONOMIC LOGIC 部分
-            if 'ECONOMIC LOGIC' in upper:
-                in_section = True
-                continue
-            
-            # 离开该部分（遇到其他部分标题）
-            if in_section and any(h in upper for h in [
-                'TECHNICAL', 'PERFORMANCE', 'SUCCESS', 'IMPROVEMENT'
-            ]):
-                break
-            
-            # 收集内容行
-            if in_section and line.strip() and len(line.strip()) > 10:
-                # 排除纯标题行（以 : 结尾）
-                if not line.strip().endswith(':'):
-                    logic_lines.append(line.strip())
-        
-        if logic_lines:
-            result = " ".join(logic_lines)
-            return result[:280]
-        
-        # 方法 2: 关键词搜索（fallback）
-        keywords = ['captures', 'measures', 'represents', 'reflects', 
-                    'profitability', 'efficiency', 'growth', 'quality', 'momentum']
-        
-        for line in lines:
-            lower = line.lower()
-            if any(kw in lower for kw in keywords) and len(line.strip()) > 20:
-                return line.strip()[:280]
-        
-        # 方法 3: 返回报告前 200 字符（最后 fallback）
-        return report[:200].strip()
-    
-    
-    # ========== 方法 2: 深度提取成功要素 ========== #
-    
-    def _extract_success_factors_deep(self, report: str) -> str:
-        """
-        深度提取成功要素（按结构提取）
-        
-        目标：提取 "SUCCESS FACTORS" 或 "WHY IT WORKS" 部分
-        """
-        if not report:
-            return ""
-        
-        lines = report.split('\n')
-        
-        # 按部分标题提取
-        success_lines = []
-        in_section = False
-        
-        for line in lines:
-            upper = line.upper()
-            
-            # 进入 SUCCESS 部分（多种可能的标题）
-            if any(header in upper for header in [
-                'SUCCESS FACTOR', 'KEY SUCCESS', 'WHY IT WORKS', 'WHY THIS WORKS'
-            ]):
-                in_section = True
-                continue
-            
-            # 离开该部分
-            if in_section and any(h in upper for h in [
-                'IMPROVEMENT', 'PERFORMANCE', 'TECHNICAL', 'ECONOMIC'
-            ]):
-                break
-            
-            # 收集内容行
-            if in_section and line.strip() and len(line.strip()) > 10:
-                if not line.strip().endswith(':') and not line.strip().startswith('#'):
-                    success_lines.append(line.strip())
-        
-        if success_lines:
-            result = " ".join(success_lines)
-            return result[:250]
-        
-        # Fallback: 关键词搜索
-        keywords = ['because', 'advantage', 'strength', 'effective', 
-                    'robust', 'works by', 'key reason', 'success']
-        
-        relevant = []
-        for line in lines:
-            lower = line.lower()
-            if any(kw in lower for kw in keywords) and len(line.strip()) > 15:
-                relevant.append(line.strip())
-                if len(relevant) >= 2:
-                    break
-        
-        if relevant:
-            return " ".join(relevant)[:250]
-        
-        return ""
-    
-    
-    # ========== 方法 3: 深度提取改进建议 ========== #
-    
-    def _extract_improvement_ideas_deep(self, report: str) -> str:
-        """
-        深度提取改进建议（按结构提取）
-        
-        目标：提取 "IMPROVEMENT DIRECTIONS" 部分
-        """
-        if not report:
-            return ""
-        
-        lines = report.split('\n')
-        
-        # 按部分标题提取
-        improve_lines = []
-        in_section = False
-        
-        for line in lines:
-            upper = line.upper()
-            
-            # 进入 IMPROVEMENT 部分
-            if 'IMPROVEMENT' in upper or 'ENHANCE' in upper or 'VARIATION' in upper:
-                in_section = True
-                continue
-            
-            # 离开该部分
-            if in_section and any(h in upper for h in [
-                'ECONOMIC', 'TECHNICAL', 'PERFORMANCE', 'SUCCESS'
-            ]):
-                break
-            
-            # 收集内容行
-            if in_section and line.strip() and len(line.strip()) > 10:
-                if not line.strip().endswith(':'):
-                    improve_lines.append(line.strip())
-        
-        if improve_lines:
-            result = " ".join(improve_lines)
-            return result[:220]
-        
-        # Fallback: 关键词搜索
-        keywords = ['try', 'could', 'consider', 'suggest', 'alternative',
-                    'variation', 'enhance', 'improve', 'test', 'add']
-        
-        relevant = []
-        for line in lines:
-            lower = line.lower()
-            if any(kw in lower for kw in keywords) and len(line.strip()) > 15:
-                relevant.append(line.strip())
-                if len(relevant) >= 2:
-                    break
-        
-        if relevant:
-            return " ".join(relevant)[:220]
-        
-        return ""
-    
-    
-    # ========== 方法 4: 深度提取失败分析 ========== #
-    
-    def _extract_failure_analysis_deep(self, report: str) -> str:
-        """
-        深度提取失败分析（按结构提取）
-        
-        目标：提取 "CORE FLAW" 或 "SPECIFIC PROBLEMS" 部分
-        """
-        if not report:
-            return ""
-        
-        lines = report.split('\n')
-        
-        # 按部分标题提取
-        flaw_lines = []
-        in_section = False
-        
-        for line in lines:
-            upper = line.upper()
-            
-            # 进入 FLAW 部分
-            if any(header in upper for header in [
-                'CORE FLAW', 'SPECIFIC PROBLEM', 'WHY IT FAIL'
-            ]):
-                in_section = True
-                continue
-            
-            # 离开该部分
-            if in_section and any(h in upper for h in [
-                'EXPECTED FAILURE', 'CORRECT APPROACH', 'IMPROVEMENT'
-            ]):
-                break
-            
-            # 收集内容行
-            if in_section and line.strip() and len(line.strip()) > 10:
-                if not line.strip().endswith(':'):
-                    flaw_lines.append(line.strip())
-        
-        if flaw_lines:
-            result = " ".join(flaw_lines)
-            return result[:250]
-        
-        # Fallback: 关键词搜索
-        keywords = ['flaw', 'problem', 'issue', 'fails because', 'wrong',
-                    'unstable', 'poor', 'error', 'weakness']
-        
-        relevant = []
-        for line in lines:
-            lower = line.lower()
-            if any(kw in lower for kw in keywords) and len(line.strip()) > 15:
-                relevant.append(line.strip())
-                if len(relevant) >= 2:
-                    break
-        
-        if relevant:
-            return " ".join(relevant)[:250]
-        
-        # 最后 fallback
-        return report[:180].strip()
-    
-    
-    # ========== 方法 5: 改进版 Prompt 构建 ========== #
     
     def _build_prompt(
         self, 
@@ -597,195 +356,101 @@ class PositiveAgents:  # ← 类名改为复数
         target_n: int,
         top_factors: Optional[List[Dict]] = None,
         bottom_factors: Optional[List[Dict]] = None,
-        negative_factors: Optional[List[Dict]] = None
+        negative_factors: Optional[List[Dict]] = None  # ← 新增负样本
     ) -> str:
-        """
-        改进版 Prompt - 三层学习框架
-        
-        关键改进：
-        1. 使用深度信息提取函数
-        2. 结构化展示学习材料
-        3. 三层学习框架（Why → How → Avoid）
-        4. 提供具体设计模式
-        """
+        """构建生成 Prompt（基于报告学习）"""
         
         rules = (
-            "You are a quantitative finance expert. Generate profitable factors.\n\n"
-            f"**OUTPUT FORMAT (STRICT):**\n"
-            f"{{\"factors\": [{{\"id\":\"r01_01\",\"code\":\"...\"}}, ...]}} - EXACTLY {target_n} factors\n"
-            "- Format: data['factor_score'] = pd.Series(<EXPR>, index=data.index).replace([np.inf,-np.inf], np.nan).fillna(0)\n"
-            "- Use ONLY allowed columns, NO loops/imports\n\n"
+            "You generate quarterly factor code on a pandas DataFrame named `data`.\n\n"
+            f"**RETURN FORMAT (STRICT):**\n"
+            f"ONLY a JSON object: {{\"factors\": [{{\"id\":\"r01_01\",\"code\":\"...\"}}, ...]}} with EXACTLY {target_n} items.\n"
+            "- JSON schema: factors = Array of objects with keys {{id: string, code: string}}.\n"
+            "- ONE SINGLE STATEMENT per item. NO semicolons. NO second assignment.\n"
+            "- Each `code` must be:\n"
+            "  data['factor_score'] = pd.Series(<EXPR>, index=data.index).replace([np.inf,-np.inf], np.nan).fillna(0)\n"
+            "- Use ONLY allowed columns. Handle zero-divisions with np.where.\n"
+            "- Avoid future/lead/shift(-k); no loops/imports/functions.\n"
+            "- Keep code ≤ 240 chars.\n\n"
         )
         
-        # ========== 构建学习材料 ========== #
-        learning_block = ""
-        
-        use_top = top_factors or []
-        use_bottom = bottom_factors or []
-        use_negative = negative_factors or []
-        
-        # ========== PART 1: Success Patterns ========== #
+        # ========== 历史因子展示 ========== #
+        history_block = ""
+
+        use_top = top_factors if top_factors else []
+        use_bottom = bottom_factors if bottom_factors else []
+        use_negative = negative_factors if negative_factors else []
+
+        # Fallback 到原逻辑
+        if not use_top and not use_bottom and prev_pairs:
+            n = len(prev_pairs)
+            top_n = max(1, min(3, n // 3))
+            bottom_n = max(1, min(2, n // 3))
+            use_top = prev_pairs[:top_n]
+            use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
+
+        # ========== Top 因子（学习对象）========== #
         if use_top:
-            learning_block += "=" * 75 + "\n"
-            learning_block += "SUCCESS PATTERNS - Learn WHY and HOW they work\n"
-            learning_block += "=" * 75 + "\n\n"
-            
+            history_block += "=== HIGH-PERFORMING FACTORS (Learn from these) ===\n\n"
             for i, p in enumerate(use_top, 1):
+                code = p.get('code', '').strip()[:250]
+                report = p.get('report', '').strip()
+                score = p.get('train_score', 'N/A')
+                
+                strengths = self._extract_strengths(report)
+                
+                history_block += f"Top #{i} (Train Score: {score:.4f}):\n" if isinstance(score, (int, float)) else f"Top #{i}:\n"
+                history_block += f"```python\n{code}\n```\n"
+                if strengths:
+                    history_block += f"✓ Strengths: {strengths}\n"
+                history_block += "\n"
+
+        # ========== Bottom 因子（避免错误）========== #
+        if use_bottom:
+            history_block += "=== LOW-PERFORMING FACTORS (Avoid these mistakes) ===\n\n"
+            for i, p in enumerate(use_bottom, 1):
                 code = p.get('code', '').strip()[:200]
                 report = p.get('report', '').strip()
-                score = p.get('train_score', 0)
+                score = p.get('train_score', 'N/A')
                 
-                # ========== 使用深度提取函数 ========== #
-                logic = self._extract_economic_logic_deep(report)
-                success = self._extract_success_factors_deep(report)
-                ideas = self._extract_improvement_ideas_deep(report)
+                weaknesses = self._extract_weaknesses(report)
                 
-                learning_block += f"✅ SUCCESS #{i} (Train Score: {score:.3f})\n\n"
-                learning_block += f"Code:\n{code}\n\n"
-                
-                if logic:
-                    learning_block += f"📊 Economic Logic:\n   {logic}\n\n"
-                if success:
-                    learning_block += f"🎯 Why It Works:\n   {success}\n\n"
-                if ideas:
-                    learning_block += f"💡 Variations to Try:\n   {ideas}\n\n"
-                
-                learning_block += "-" * 75 + "\n\n"
+                history_block += f"Weak #{i} (Train Score: {score:.4f}):\n" if isinstance(score, (int, float)) else f"Weak #{i}:\n"
+                history_block += f"```python\n{code}\n```\n"
+                if weaknesses:
+                    history_block += f"✗ Issues: {weaknesses}\n"
+                history_block += "\n"
         
-        # ========== PART 2: Failure Patterns ========== #
-        if use_bottom:
-            learning_block += "=" * 75 + "\n"
-            learning_block += "FAILURE PATTERNS - Learn what to AVOID\n"
-            learning_block += "=" * 75 + "\n\n"
-            
-            for i, p in enumerate(use_bottom, 1):
-                code = p.get('code', '').strip()[:180]
-                report = p.get('report', '').strip()
-                
-                # ========== 使用深度提取函数 ========== #
-                failure = self._extract_failure_analysis_deep(report)
-                
-                learning_block += f"❌ FAILURE #{i}\n\n"
-                learning_block += f"Code:\n{code}\n\n"
-                
-                if failure:
-                    learning_block += f"⚠️  Why It Failed:\n   {failure}\n\n"
-                
-                learning_block += "-" * 75 + "\n\n"
-        
-        # ========== PART 3: Anti-Patterns ========== #
+        # ========== 负样本（反面教材）========== #
         if use_negative:
-            learning_block += "=" * 75 + "\n"
-            learning_block += "ANTI-PATTERNS - NEVER repeat these mistakes\n"
-            learning_block += "=" * 75 + "\n\n"
-            
+            history_block += "=== NEGATIVE EXAMPLES (DO NOT IMITATE) ===\n\n"
             for i, p in enumerate(use_negative, 1):
-                code = p.get('code', '').strip()[:150]
+                code = p.get('code', '').strip()[:200]
                 report = p.get('report', '').strip()[:150]
                 
-                learning_block += f"🚫 Anti-Pattern #{i}\n"
-                learning_block += f"   Code: {code}\n"
-                learning_block += f"   Problem: {report}\n\n"
-        
-        if not learning_block:
-            learning_block = "(No historical factors available)\n\n"
-        
-        # ========== 任务指导（三层学习框架）========== #
-        task = f"""
-    {"=" * 75}
-    YOUR TASK: Generate {target_n} factors that OUTPERFORM previous attempts
-    {"=" * 75}
-    
-    **THREE-LEVEL LEARNING FRAMEWORK:**
-    
-    ┌──────────────────────────────────────────────────────────┐
-    │ LEVEL 1: UNDERSTAND WHY (Economic Logic)                 │
-    └──────────────────────────────────────────────────────────┘
-    
-    From SUCCESS PATTERNS above:
-    → What financial relationships do they capture?
-    → Key combinations: Profitability × Efficiency, Growth × Quality, Momentum × Fundamentals
-    
-    Your NEW factors MUST have clear economic interpretation.
-    
-    ┌──────────────────────────────────────────────────────────┐
-    │ LEVEL 2: LEARN HOW (Technical Implementation)            │
-    └──────────────────────────────────────────────────────────┘
-    
-    From SUCCESS PATTERNS above:
-    → Robust transforms: rank(), pct_change(), rolling().mean(), quantile()
-    → Proper normalization: division by scale factors, cross-sectional ranking
-    → Zero handling: np.where(denom != 0, num/denom, 0)
-    
-    Your NEW factors MUST be technically sound.
-    
-    ┌──────────────────────────────────────────────────────────┐
-    │ LEVEL 3: AVOID MISTAKES (What NOT to do)                 │
-    └──────────────────────────────────────────────────────────┘
-    
-    From FAILURE PATTERNS:
-    → Understand their core flaws
-    → Don't repeat similar mistakes
-    
-    From ANTI-PATTERNS:
-    → NEVER use those fundamental errors
-    → Ensure opposite characteristics
-    
-    **CONCRETE DESIGN PATTERNS (Use these as templates):**
-    
-    Pattern A - Profitability Ratio:
-      Formula: (Operating Income / Total Assets).rank()
-      Why: Captures efficiency, cross-sectionally normalized
-      
-    Pattern B - Growth Quality:
-      Formula: (Revenue.pct_change() × (Revenue / Assets)).rank()
-      Why: Combines growth momentum + operational efficiency
-    
-    Pattern C - Cash Quality:
-      Formula: (Operating Cash Flow / Net Income).rolling(4).mean()
-      Why: Earnings quality, time-smoothed
-    
-    Pattern D - Efficiency Momentum:
-      Formula: ((Revenue / Assets) / (Revenue / Assets).shift(4)).rank()
-      Why: Improving efficiency trend
-    
-    **FIELD COMBINATIONS THAT WORK:**
-    
-    Strong Predictors:
-    - revtq (revenue) / atq (assets) → efficiency
-    - ibq (income) / atq (assets) → profitability
-    - oancfq (cash flow) / saleq (sales) → quality
-    
-    Growth Signals:
-    - revtq.pct_change() → revenue growth
-    - niq.pct_change() → earnings growth
-    
-    Quality Indicators:
-    - oancfq / niq → cash quality
-    - (actq - lctq) / atq → working capital ratio
-    
-    **FINAL CHECKLIST (Verify EACH factor before including):**
-    
-    ✓ Has clear economic interpretation (can explain WHY it predicts returns)
-    ✓ Uses 2-4 relevant fields (not too simple, not too complex)
-    ✓ Applies robust transformation (rank/pct_change/rolling/quantile)
-    ✓ Handles zeros properly: np.where(denom != 0, ...)
-    ✓ Is DIFFERENT from failed factors
-    ✓ Is DIFFERENT from anti-patterns
-    ✓ Would plausibly work in real markets
-    
-    Now generate EXACTLY {target_n} NEW factors following ALL guidelines above.
-    Return ONLY JSON with no extra text.
-    """
+                history_block += f"BAD #{i}:\n"
+                history_block += f"```python\n{code}\n```\n"
+                history_block += f"Why It Failed: {report}\n\n"
+
+        if not history_block:
+            history_block = "(No previous factors available - generating from scratch)\n\n"
         
         return (
             rules +
             self._whitelist_block() +
-            learning_block +
-            task
+            history_block +
+            "=== YOUR TASK ===\n" +
+            f"Generate EXACTLY {target_n} NEW factors that OUTPERFORM previous attempts.\n\n" +
+            "**Learning Strategy:**\n" +
+            "1. BUILD ON top factors: similar patterns, field combinations, transformations\n" +
+            "2. AVOID bottom/negative factors: don't repeat their mistakes\n" +
+            "3. INTRODUCE VARIATIONS: different ratios, time windows, normalizations\n\n" +
+            "**Code Guidelines:**\n" +
+            "- Use robust transformations: rank(), pct_change(), rolling().mean()\n" +
+            "- Combine financial dimensions (profitability + efficiency, growth + quality)\n" +
+            "- Apply proper normalization\n" +
+            "- Ensure adequate data coverage (avoid excessive NaN)\n\n" 
         )
-    
-    
+
     def _build_refill_prompt(
         self, 
         missing: int, 
@@ -833,7 +498,56 @@ class PositiveAgents:  # ← 类名改为复数
         cols = [m.group(1) for m in self._COLREF.finditer(code or "")]
         return [c for c in cols if c.lower() != "factor_score"]
     
+    def _extract_strengths(self, report: str, max_chars: int = 200) -> str:
+        """从报告中提取优点"""
+        if not report or not report.strip():
+            return ""
+        
+        success_keywords = [
+            'strength', 'good', 'high', 'effective', 'excellent', 
+            'consistent', 'robust', 'advantage', 'positive', 'strong'
+        ]
+        
+        lines = report.split('\n')
+        relevant = []
+        
+        for line in lines:
+            if any(kw in line.lower() for kw in success_keywords):
+                relevant.append(line.strip())
+                if len(relevant) >= 2:
+                    break
+        
+        if relevant:
+            result = ". ".join(relevant)
+            return result[:max_chars] + "..." if len(result) > max_chars else result
+        
+        return report[:150].strip() + "..." if len(report) > 150 else report.strip()
     
+    def _extract_weaknesses(self, report: str, max_chars: int = 200) -> str:
+        """从报告中提取问题"""
+        if not report or not report.strip():
+            return ""
+        
+        failure_keywords = [
+            'weakness', 'weak', 'poor', 'low', 'risk', 'problem', 
+            'issue', 'drawdown', 'avoid', 'negative', 'bad', 'insufficient'
+        ]
+        
+        lines = report.split('\n')
+        relevant = []
+        
+        for line in lines:
+            if any(kw in line.lower() for kw in failure_keywords):
+                relevant.append(line.strip())
+                if len(relevant) >= 2:
+                    break
+        
+        if relevant:
+            result = ". ".join(relevant)
+            return result[:max_chars] + "..." if len(result) > max_chars else result
+        
+        return report[:150].strip() + "..." if len(report) > 150 else report.strip()
+
     # ================= 代码清洗与校验 =================
     def _force_single_assignment(self, code: str) -> str:
         """强制重写为单语句"""
