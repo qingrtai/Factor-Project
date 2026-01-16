@@ -225,7 +225,7 @@ class PositiveAgents:  # ← 类名改为复数
         negatives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'negative']
         
         top_k = min(3, len(positives))
-        bottom_k = min(2, len(positives))
+        bottom_k = 0
         
         top_factors = positives[:top_k] if positives else []
         bottom_factors = positives[-bottom_k:] if len(positives) > bottom_k else []
