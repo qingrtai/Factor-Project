@@ -66,9 +66,9 @@ class IterativeOptimizer:
         # === 改动点1：读取评分与切分说明，便于运行时留痕 ===
         self.score_desc = _cfg_get('SCORE_DESC', "Score = (Sharpe + AnnRet + D) / 3")
         self.derived_desc = _cfg_get('DERIVED_METRIC_DESC', "D = 1 - MaxDD")
-        self.train_years = _cfg_get('TRAIN_YEARS', (1961, 2000))
-        self.val_years   = _cfg_get('VAL_YEARS',   (2001, 2010))
-        self.test_years  = _cfg_get('TEST_YEARS',  (2011, 2025))
+        self.train_years = _cfg_get('TRAIN_YEARS', (1981, 2000))
+        self.val_years   = _cfg_get('VAL_YEARS',   (2001, 2014))
+        self.test_years  = _cfg_get('TEST_YEARS',  (2015, 2021))
 
         # 组件
         self.memory_manager = MemoryManager()
