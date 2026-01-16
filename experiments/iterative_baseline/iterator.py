@@ -324,7 +324,33 @@ class IterativeOptimizer:
                 date_col=self.date_col,
                 periods_per_year=self.periods_per_year
             )
+            
+            # ========== 新增：过滤严重过拟合的因子 ========== #
+            if df is not None and not df.empty:
+                # 计算 val/train 比值
+                df['_val_train_ratio'] = df['val_score'] / df['train_score'].replace(0, 0.001)
+                
+                # 设定阈值（保留 6x 以下的，过滤 8x 以上的）
+                MAX_RATIO = 8.0
+                
+                before = len(df)
+                # 过滤掉比值过高的（绝对值）
+                df = df[df['_val_train_ratio'].abs() <= MAX_RATIO]
+                after = len(df)
+                
+                if after < before:
+                    self.logger.warning(
+                        f"⚠️ 过滤掉 {before - after} 个严重过拟合因子 "
+                        f"(|val/train| > {MAX_RATIO}x)"
+                    )
+                
+                # 删除临时列
+                if '_val_train_ratio' in df.columns:
+                    df = df.drop(columns=['_val_train_ratio'])
+            # ============================================== #
+            
             return df
+            
         except Exception as e:
             self.logger.error(f"评估失败: {e}")
             return None
