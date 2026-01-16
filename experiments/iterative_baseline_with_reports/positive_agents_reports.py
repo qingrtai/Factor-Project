@@ -141,7 +141,7 @@ class PositiveAgent:
         prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
 
         # 分离 top 和 bottom
-        top_k = min(3, len(prev_pairs_with_score))
+        top_k = min(4, len(prev_pairs_with_score))
         bottom_k = min(2, len(prev_pairs_with_score))
 
         top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
