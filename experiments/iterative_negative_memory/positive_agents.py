@@ -237,99 +237,140 @@ def _build_ultra_strict_prompt(
             f"{code}\n"
         )
 
-    # 只展示前 5 个最好的因子
-    pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:5])) or "N/A"
+    # 展示所有10个因子
+    pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives))
 
+    # ========== 新增：负样本展示 ========== #
+    neg_block = ""
+    if negatives:
+        def _fmt_neg(rec: Dict[str, Any], i: int) -> str:
+            """格式化负样本"""
+            code = str(rec.get("code", ""))[:250]
+            trn = rec.get("train_score", None)
+            ts = "N/A" if trn is None else f"{float(trn):.4f}"
+            return f"BAD #{i}  Train={ts}\n{code}\n"
+        
+        neg_lines = "\n".join(_fmt_neg(r, i + 1) for i, r in enumerate(negatives))
+        
+        neg_block = f"""
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ❌ FAILED FACTORS (AVOID THESE PATTERNS - LOW TRAIN SCORES)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    {neg_lines}
+    
+    These factors have LOW train scores and demonstrate common pitfalls:
+    - Missing denominator checks (division by zero)
+    - Poor normalization
+    - Noise amplification
+    - Weak economic intuition
+    
+    DO NOT copy these patterns. Learn what to AVOID.
+    """
+    # ========================================= #
+    
     return f"""You are generating factor formulas. Follow these examples EXACTLY:
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TOP PERFORMING FACTORS (COPY THEIR STRUCTURE)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{pos_block}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-EVERY factor MUST follow this EXACT 2-line structure:
-
-Line 1: data['factor_score'] = np.where(data['DENOM']==0, 0, EXPRESSION/data['DENOM'])
-Line 2: data['factor_score'] = data['factor_score'].fillna(0)
-
-Where:
-- DENOM = denominator field (revtq, saleq, atq, etc.)
-- EXPRESSION = numerator (can be: single field, sum, difference, etc.)
-
-EXAMPLES OF VALID VARIATIONS:
-
-Example 1 (difference in numerator):
-data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])
-data['factor_score'] = data['factor_score'].fillna(0)
-
-Example 2 (sum in numerator):
-data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])
-data['factor_score'] = data['factor_score'].fillna(0)
-
-Example 3 (single field in numerator):
-data['factor_score'] = np.where(data['saleq']==0, 0, data['ibq']/data['saleq'])
-data['factor_score'] = data['factor_score'].fillna(0)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-❌ ABSOLUTELY FORBIDDEN (WILL BE REJECTED)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. ONE-LINE formats like:
-   data['factor_score'] = (data['niq']-data['txpq']) / (data['revtq'] + 1e-8)
-   ❌ WRONG - missing np.where, missing second line
-
-2. Using (denom + 1e-8) instead of np.where:
-   data['factor_score'] = EXPRESSION / (data['DENOM'] + 1e-8)
-   ❌ WRONG - must use np.where
-
-3. Any format without np.where:
-   ❌ REJECTED IMMEDIATELY
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 YOUR TASK
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Generate {n} factors using the MANDATORY 2-line np.where structure above.
-
-REQUIREMENTS:
-
-1. **Structure** (100% compliance):
-   - Line 1: MUST start with "data['factor_score'] = np.where("
-   - Line 2: MUST be "data['factor_score'] = data['factor_score'].fillna(0)"
-   
-2. **Fields**:
-   - Available: {_FIELDS_FOR_PROMPT}
-   - Use 2-3 fields per factor
-   - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
-   
-3. **Variations** (change these, keep structure):
-   - Numerator: can be niq-txpq, ibq+cogsq, single field, etc.
-   - Denominator: revtq, saleq, atq, lctq, etc.
-   - Fields: use different combinations
-
-4. **Format** (CRITICAL):
-   - Use \\n to separate two lines in JSON
-   - Use data['field'] format (NOT data.get)
-   - No markdown, no explanations, just JSON
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  OUTPUT FORMAT (JSON ONLY)  ⚠️
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[
-  {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, (data['ibq']-data['txpq'])/data['saleq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-  {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, (data['revtq']+data['niq'])/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-  {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, data['cheq']/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
-]
-
-Start output with '[' immediately. No explanations. Exactly {n} factors.
-
-REMEMBER: Every factor MUST have np.where. No exceptions. No (denom + 1e-8).""".strip()
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    TOP PERFORMING FACTORS (COPY THEIR STRUCTURE)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    {pos_block}
+    {neg_block}
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
+    
+    return f"""You are generating factor formulas. Follow these examples EXACTLY:
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    TOP PERFORMING FACTORS (COPY THEIR STRUCTURE)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    {pos_block}
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    EVERY factor MUST follow this EXACT 2-line structure:
+    
+    Line 1: data['factor_score'] = np.where(data['DENOM']==0, 0, EXPRESSION/data['DENOM'])
+    Line 2: data['factor_score'] = data['factor_score'].fillna(0)
+    
+    Where:
+    - DENOM = denominator field (revtq, saleq, atq, etc.)
+    - EXPRESSION = numerator (can be: single field, sum, difference, etc.)
+    
+    EXAMPLES OF VALID VARIATIONS:
+    
+    Example 1 (difference in numerator):
+    data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])
+    data['factor_score'] = data['factor_score'].fillna(0)
+    
+    Example 2 (sum in numerator):
+    data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])
+    data['factor_score'] = data['factor_score'].fillna(0)
+    
+    Example 3 (single field in numerator):
+    data['factor_score'] = np.where(data['saleq']==0, 0, data['ibq']/data['saleq'])
+    data['factor_score'] = data['factor_score'].fillna(0)
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ❌ ABSOLUTELY FORBIDDEN (WILL BE REJECTED)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    1. ONE-LINE formats like:
+       data['factor_score'] = (data['niq']-data['txpq']) / (data['revtq'] + 1e-8)
+       ❌ WRONG - missing np.where, missing second line
+    
+    2. Using (denom + 1e-8) instead of np.where:
+       data['factor_score'] = EXPRESSION / (data['DENOM'] + 1e-8)
+       ❌ WRONG - must use np.where
+    
+    3. Any format without np.where:
+       ❌ REJECTED IMMEDIATELY
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    📋 YOUR TASK
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    Generate {n} factors using the MANDATORY 2-line np.where structure above.
+    
+    REQUIREMENTS:
+    
+    1. **Structure** (100% compliance):
+       - Line 1: MUST start with "data['factor_score'] = np.where("
+       - Line 2: MUST be "data['factor_score'] = data['factor_score'].fillna(0)"
+       
+    2. **Fields**:
+       - Available: {_FIELDS_FOR_PROMPT}
+       - Use 2-3 fields per factor
+       - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
+       
+    3. **Variations** (change these, keep structure):
+       - Numerator: can be niq-txpq, ibq+cogsq, single field, etc.
+       - Denominator: revtq, saleq, atq, lctq, etc.
+       - Fields: use different combinations
+    
+    4. **Format** (CRITICAL):
+       - Use \\n to separate two lines in JSON
+       - Use data['field'] format (NOT data.get)
+       - No markdown, no explanations, just JSON
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ⚠️  OUTPUT FORMAT (JSON ONLY)  ⚠️
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    [
+      {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, (data['ibq']-data['txpq'])/data['saleq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+      {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, (data['revtq']+data['niq'])/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+      {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, data['cheq']/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+    ]
+    
+    Start output with '[' immediately. No explanations. Exactly {n} factors.
+    
+    REMEMBER: Every factor MUST have np.where. No exceptions. No (denom + 1e-8).""".strip()
 
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
