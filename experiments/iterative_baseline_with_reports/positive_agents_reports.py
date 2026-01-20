@@ -371,6 +371,8 @@ class PositiveAgent:
         """
         检测是否在 numpy array 上调用 pandas 方法
         
+        改进版本：正确处理嵌套括号
+        
         常见错误模式:
         - np.where(...).rank()
         - np.where(...).rolling()
@@ -379,20 +381,27 @@ class PositiveAgent:
         """
         import re
         
-        # 检测 np.where(...).method() 模式
-        # 这里匹配 np.where 后面直接跟 pandas 方法
-        patterns = [
-            r'np\.where\s*\([^)]+\)\s*\.\s*(rank|rolling|pct_change|shift|diff|resample|cumsum|cumprod)',
-            r'np\.where\s*\([^)]+\)\s*\.\s*[a-zA-Z_]+\s*\(',  # 更通用的模式
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, code, re.IGNORECASE)
-            if match:
-                rejected.append(f"numpy_array_method:{match.group(0)[:50]}")
-                return False
+        # 改进的检测方法：不依赖于匹配完整的括号结构
+        # 而是检测 np.where 后面是否出现了 ).method( 模式
+        if 'np.where' in code:
+            # 找到所有 np.where 的位置
+            for match in re.finditer(r'np\.where', code, re.IGNORECASE):
+                start = match.start()
+                # 查看后续 200 个字符（足够覆盖一个 np.where 调用）
+                snippet = code[start:start+200]
+                
+                # 检测是否有 ).method( 模式
+                # 这表示在某个括号表达式的结果上调用了方法
+                method_pattern = r'\)\s*\.\s*(rank|rolling|pct_change|shift|diff|resample|cumsum|cumprod)\s*\('
+                if re.search(method_pattern, snippet, re.IGNORECASE):
+                    # 找到了 np.where...后面跟着的 pandas 方法调用
+                    match_obj = re.search(method_pattern, snippet, re.IGNORECASE)
+                    if match_obj:
+                        rejected.append(f"numpy_array_method:{match_obj.group(0)[:50]}")
+                        return False
         
         return True
+
 
     # ========== 修改 4: 同样更新 _build_refill_prompt() ========== #
     def _build_refill_prompt(self, missing: int, reasons: List[str], existing_codes: List[str] = None) -> str:
@@ -527,17 +536,35 @@ class PositiveAgent:
 
     
     def _force_single_assignment(self, code: str) -> str:
-        """强制重写为单语句"""
+        """强制重写为单语句（改进版 - 处理 JSON 污染）"""
         if not isinstance(code, str):
             return ""
         s = code.strip()
         s = self._preclean_json_text(s)
+        
+        # ===== 新增：清理可能混入的 JSON 片段 ===== #
+        # 如果代码中包含 "},{"，说明混入了多个 JSON 对象
+        if '"},{"' in s or '\"},{"' in s:
+            # 只取第一个完整的赋值语句
+            # 在 data['factor_score'] = ... 之后，遇到 "},{ 就停止
+            json_marker_pos = s.find('"},{"')
+            if json_marker_pos == -1:
+                json_marker_pos = s.find('\"},{"')
+            if json_marker_pos != -1:
+                s = s[:json_marker_pos].strip()
         
         # 提取赋值语句的右侧
         m = re.search(r"data\[['\"]factor_score['\"]\]\s*=\s*(.+)", s, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return ""
         rhs = m.group(1).strip()
+        
+        # ===== 新增：更激进地清理尾部的 JSON 污染 ===== #
+        # 移除末尾的 "},{... 或 "}... 等 JSON 片段
+        for json_end in ['"}', '"},{', '\"},', '\"},{']:
+            if json_end in rhs:
+                pos = rhs.find(json_end)
+                rhs = rhs[:pos].strip()
         
         # 处理多行代码（只取第一条语句）
         for sep in [";", "\n", "\r"]:
@@ -550,8 +577,7 @@ class PositiveAgent:
         if rhs.startswith("{"):
             return ""
         
-        # ← 关键修复：检查是否已经是完整的 pd.Series(...).replace(...).fillna(...) 格式
-        # 如果已经包含了 pd.Series 且有 replace 和 fillna，说明格式已经正确
+        # 检查是否已经是完整的 pd.Series(...).replace(...).fillna(...) 格式
         if (rhs.startswith("pd.Series(") and 
             ".replace([np.inf,-np.inf],np.nan)" in rhs and 
             ".fillna(0)" in rhs):
