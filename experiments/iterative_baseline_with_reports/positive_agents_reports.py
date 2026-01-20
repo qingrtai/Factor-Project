@@ -275,7 +275,17 @@ class PositiveAgent:
             "- Use ONLY allowed columns (whitelist below). Handle zero-divisions inside <EXPR> with np.where.\n"
             "- For <EXPR> avoid future/lead/shift(-k); no loops/imports/functions.\n"
             "- Keep code concise (≤ 240 chars).\n\n"
-        )
+
+             # ====== 新增：明确禁止在 numpy array 上调用 pandas 方法 ====== #
+            "**CRITICAL - AVOID NUMPY ARRAY METHODS:**\n"
+            "- NEVER write: np.where(...).rank() or np.where(...).rolling() or np.where(...).pct_change()\n"
+            "- np.where() returns a numpy array, which does NOT have .rank(), .rolling(), .shift(), .pct_change() methods\n"
+            "- If you need these transformations, apply them BEFORE np.where or on pandas Series directly:\n"
+            "  ✓ CORRECT: (data['col1']/data['col2']).rolling(4).mean()\n"
+            "  ✓ CORRECT: data['col1'].rank() / data['col2']\n"
+            "  ✗ WRONG: np.where(data['col']==0, 0, data['col1']/data['col2']).rolling(4)\n"
+            "  ✗ WRONG: np.where(data['col']==0, 0, expr).rank()\n\n"
+            )
         
         # 示例项（使用白名单字段）
         example_item = (
@@ -349,17 +359,51 @@ class PositiveAgent:
             "2. AVOID bottom factors: Don't repeat their mistakes (high drawdown, low coverage, poor diversification)\n" +
             "3. INTRODUCE VARIATIONS: Don't copy exactly - try different field ratios, time windows, or normalizations\n\n" +
             "**Code-Level Guidelines:**\n" +
-            "- Use robust transformations: rank(), pct_change(), rolling().mean()\n" +
+            "- Use robust transformations on pandas Series: (data['col1']/data['col2']).rank(), .rolling().mean()\n" +
+            "- Remember: Call pandas methods (.rank, .rolling) on data['col'] or expressions, NOT on np.where()\n" +
             "- Combine different financial dimensions (profitability + efficiency, growth + quality)\n" +
             "- Apply proper normalization to reduce outliers\n" +
             "- Ensure adequate data coverage (avoid excessive NaN)\n\n" 
         )
 
+    # ========== 修改 2: 添加新的检测函数 ========== #
+    def _check_numpy_array_methods(self, code: str, rejected: List[str]) -> bool:
+        """
+        检测是否在 numpy array 上调用 pandas 方法
+        
+        常见错误模式:
+        - np.where(...).rank()
+        - np.where(...).rolling()
+        - np.where(...).pct_change()
+        - np.where(...).shift()
+        """
+        import re
+        
+        # 检测 np.where(...).method() 模式
+        # 这里匹配 np.where 后面直接跟 pandas 方法
+        patterns = [
+            r'np\.where\s*\([^)]+\)\s*\.\s*(rank|rolling|pct_change|shift|diff|resample|cumsum|cumprod)',
+            r'np\.where\s*\([^)]+\)\s*\.\s*[a-zA-Z_]+\s*\(',  # 更通用的模式
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, code, re.IGNORECASE)
+            if match:
+                rejected.append(f"numpy_array_method:{match.group(0)[:50]}")
+                return False
+        
+        return True
+
+    # ========== 修改 4: 同样更新 _build_refill_prompt() ========== #
     def _build_refill_prompt(self, missing: int, reasons: List[str], existing_codes: List[str] = None) -> str:
         """构建补货 prompt"""
         reasons_txt = ""
         if reasons:
             reasons_txt = "Previously rejected reasons: " + "; ".join(set(reasons[:6])) + "\n"
+            # 特别提醒 numpy array 问题
+            if any('numpy_array_method' in r for r in reasons):
+                reasons_txt += "\n**CRITICAL**: Some factors were rejected for calling pandas methods on numpy arrays.\n"
+                reasons_txt += "Remember: np.where() returns numpy array, use pandas Series for .rank()/.rolling() etc.\n"
         
         existing_txt = ""
         if existing_codes:
@@ -379,7 +423,9 @@ class PositiveAgent:
             "Return ONLY JSON {\"factors\":[...]} with EXACTLY "
             f"{missing} items, same STRICT rules (single statement only). "
             "JSON schema: factors = Array of objects with keys {id: string, code: string}. "
-            "Do NOT return an array of strings; it will be discarded.\n" +
+            "Do NOT return an array of strings; it will be discarded.\n\n"
+            "**REMINDER**: Do NOT call .rank()/.rolling()/.pct_change() on np.where() results!\n"
+            "These methods only work on pandas Series, not numpy arrays.\n\n" +
             self._whitelist_block() +
             "Do not use semicolons, no second assignment, no code fences, no `json` prefix."
         )
@@ -568,6 +614,11 @@ class PositiveAgent:
             return None
 
         c = single.strip()
+
+            # ====== 新增检查：必须在其他检查之前 ====== #
+        if not self._check_numpy_array_methods(c, rejected):
+            return None
+        
         if not self._forbidden_scan(c, rejected):
             return None
         if not self._no_bare_column_refs(c, rejected):
