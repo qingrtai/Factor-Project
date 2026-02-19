@@ -91,7 +91,6 @@ def extract_best_round_factors(experiment: str, best_round: int) -> list:
     
     if not csv_path.exists():
         logger.error(f"❌ 找不到文件: {csv_path}")
-        # 尝试查找该目录下的其他CSV文件
         exp_dir = Path(f"results/{experiment}")
         if exp_dir.exists():
             csv_files = list(exp_dir.glob("*.csv"))
@@ -120,7 +119,6 @@ def extract_best_round_factors(experiment: str, best_round: int) -> list:
                 last_error = e
                 continue
             except Exception as e:
-                # 其他类型的错误（比如文件损坏）
                 logger.error(f"❌ 读取文件时出错 (encoding={encoding}): {e}")
                 return []
         
@@ -128,41 +126,48 @@ def extract_best_round_factors(experiment: str, best_round: int) -> list:
             logger.error(f"❌ 无法用任何编码读取文件: {csv_path}")
             logger.error(f"   最后一次错误: {last_error}")
             return []
-        
+
+        # ===== 兼容 'round' 和 'round_num' 两种列名 =====
+        if 'round' in df.columns:
+            round_col = 'round'
+        elif 'round_num' in df.columns:
+            round_col = 'round_num'
+        else:
+            round_col = None
+
         # factor_baseline 可能没有 round 列，直接使用所有数据
         if experiment == 'factor_baseline':
-            if 'round' in df.columns:
-                best_df = df[df['round'] == best_round].copy()
+            if round_col is not None:
+                best_df = df[df[round_col] == best_round].copy()
             else:
-                # 没有 round 列，直接使用所有数据
                 logger.info(f"  ℹ️  {experiment} 没有 round 列，使用全部因子")
                 best_df = df.copy()
         else:
-            # 其他实验：筛选最佳轮次的因子
-            best_df = df[df['round'] == best_round].copy()
+            if round_col is None:
+                logger.error(f"❌ {experiment} 的文件缺少 round/round_num 列，列名为: {list(df.columns)}")
+                return []
+            best_df = df[df[round_col] == best_round].copy()
         
         if best_df.empty:
             logger.warning(f"⚠️  {experiment} 的 round {best_round} 没有数据")
             return []
-        
-        # 转换为因子列表格式（batch_evaluate 需要的格式）
-        factors = []
         
         # 检查必需的列是否存在
         if 'code' not in best_df.columns:
             logger.error(f"❌ 文件缺少 'code' 列。当前列名: {list(best_df.columns)}")
             return []
         
+        # 转换为因子列表格式
+        factors = []
         for i, (_, row) in enumerate(best_df.iterrows(), start=1):
             factor_dict = {'code': row['code']}
-            # 如果有 factor_id 列就保留，否则使用序号
             if 'factor_id' in best_df.columns and pd.notna(row.get('factor_id')):
                 factor_dict['factor_id'] = row['factor_id']
             else:
                 factor_dict['factor_id'] = i
             factors.append(factor_dict)
         
-        logger.info(f"  ✓ 提取 {len(factors)} 个因子 (round {best_round})")
+        logger.info(f"  ✓ 提取 {len(factors)} 个因子 (round {best_round}，列名: {round_col})")
         return factors
         
     except Exception as e:
