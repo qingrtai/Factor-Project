@@ -322,12 +322,12 @@ class FactorIterator:
             try:
                 # 构建 FactorMetrics
                 metrics = FactorMetrics(
-                    sharpe=row.get("val_sharpe"),
-                    ann_ret=row.get("val_ann_ret"),
-                    max_dd=row.get("val_max_dd"),
-                    coverage=row.get("val_coverage"),
+                    sharpe=row.get("train_sharpe"),
+                    ann_ret=row.get("train_ann_ret"),
+                    max_dd=row.get("train_max_dd"),
+                    coverage=row.get("train_coverage"),
                     train_score=row.get("train_score"),
-                    val_score=row.get("val_score"),
+                    val_score=None,
                     rank=idx + 1,                    # 排名（按 val_score 降序）
                     total_factors=len(df),
                 )
