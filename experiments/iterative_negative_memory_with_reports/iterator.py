@@ -151,7 +151,11 @@ class FactorIterator:
                 extra_df = self._evaluate_factors(extra_codes)
                 if extra_df is not None and not extra_df.empty:
                     extra_df = extra_df.dropna(subset=['val_score'])
+                        # ← 在这里加去重，然后才 concat
+                    existing_codes = set(evaluated_df['code'].astype(str).tolist())
+                    extra_df = extra_df[~extra_df['code'].astype(str).isin(existing_codes)]
                     evaluated_df = pd.concat([evaluated_df, extra_df], ignore_index=True)
+    
             
             self.logger.info(f"[Round {round_num}] 最终有效因子数: {len(evaluated_df)}")
             # ===== 新增结束 =====
