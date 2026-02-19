@@ -120,7 +120,7 @@ class FactorIterator:
                 raise ValueError(f"Round {round_num}: 因子生成失败")
             
             self.total_factors_generated += len(new_factors)
-            
+
             # Step 5: 评估新因子
             self.logger.info(f"[Round {round_num}] Step 5: 评估 {len(new_factors)} 个新因子")
             
@@ -129,7 +129,32 @@ class FactorIterator:
             if evaluated_df is None or evaluated_df.empty:
                 raise ValueError(f"Round {round_num}: 因子评估失败")
             
-            self.total_factors_evaluated += len(evaluated_df)
+            # ===== 新增：过滤 NaN + 补货 =====
+            evaluated_df = evaluated_df.dropna(subset=['val_score']).reset_index(drop=True)
+            self.logger.info(f"[Round {round_num}] 过滤后有效因子: {len(evaluated_df)}/{self.factors_per_round}")
+            
+            nan_refill_attempt = 0
+            while len(evaluated_df) < self.factors_per_round and nan_refill_attempt < 3:
+                nan_refill_attempt += 1
+                deficit = self.factors_per_round - len(evaluated_df)
+                self.logger.info(f"[Round {round_num}] NaN补货 attempt {nan_refill_attempt}: 需要 {deficit} 个")
+                
+                extra_codes = self.positive_agent.generate_factors(
+                    current_round=round_num,
+                    target_n=deficit,
+                    id_prefix=f"r{round_num}_refill{nan_refill_attempt}_",
+                    memory_records=combined_memory
+                )
+                if not extra_codes:
+                    break
+                
+                extra_df = self._evaluate_factors(extra_codes)
+                if extra_df is not None and not extra_df.empty:
+                    extra_df = extra_df.dropna(subset=['val_score'])
+                    evaluated_df = pd.concat([evaluated_df, extra_df], ignore_index=True)
+            
+            self.logger.info(f"[Round {round_num}] 最终有效因子数: {len(evaluated_df)}")
+            # ===== 新增结束 =====
             
             # ========== Step 6: 生成因子报告（新增）========== #
             self.logger.info(f"[Round {round_num}] Step 6: 生成因子报告")
