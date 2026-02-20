@@ -140,12 +140,22 @@ class PositiveAgent:
         # 按 train_score 排序
         prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
 
-        # 分离 top 和 bottom
+        # 分离 top 和 bottom 和middle
         top_k = min(4, len(prev_pairs_with_score))
-        bottom_k = min(2, len(prev_pairs_with_score))
-
+        bottom_k = min(3, len(prev_pairs_with_score))
+        middle_k = 3
+        
         top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
         bottom_factors = prev_pairs_with_score[-bottom_k:] if len(prev_pairs_with_score) > bottom_k else []
+        
+        mid_start = top_k
+        mid_end = max(mid_start, len(prev_pairs_with_score) - bottom_k)
+        middle_pool = prev_pairs_with_score[mid_start:mid_end]
+        if len(middle_pool) >= middle_k:
+            step = max(1, len(middle_pool) // middle_k)
+            middle_factors = [middle_pool[i * step] for i in range(middle_k)]
+        else:
+            middle_factors = middle_pool
 
         # 更新原来的 prev_pairs（保持兼容性）
         prev_pairs = prev_pairs_with_score
@@ -165,7 +175,8 @@ class PositiveAgent:
                 prev_pairs, 
                 batch,
                 top_factors=top_factors,      # 传入 top 因子
-                bottom_factors=bottom_factors  # 传入 bottom 因子
+                bottom_factors=bottom_factors,  # 传入 bottom 因子
+                middle_factors=middle_factors  # ← 加这行
             )
             self.logger.info(f"Round {round_num}: 调用 GPT 生成 {batch} 个新因子")
             resp = call_gpt(prompt, temperature=self.temperature, max_tokens=self.max_tokens)
@@ -253,8 +264,9 @@ class PositiveAgent:
         self, 
         prev_pairs: List[Dict],  # 保持不变
         target_n: int,
-        top_factors: Optional[List[Dict]] = None,    # 新增
-        bottom_factors: Optional[List[Dict]] = None   # 新增
+        top_factors: Optional[List[Dict]] = None,    
+        bottom_factors: Optional[List[Dict]] = None,   
+        middle_factors: Optional[List[Dict]] = None,   # ← 新增新增
     ) -> str:
         """
         构建生成 Prompt（带报告版本）
@@ -300,6 +312,7 @@ class PositiveAgent:
         # 使用传入的 top_factors 和 bottom_factors（如果有）
         use_top = top_factors if top_factors else []
         use_bottom = bottom_factors if bottom_factors else []
+        use_middle = middle_factors if middle_factors else []
 
         # 如果没有传入分组，fallback 到原逻辑
         if not use_top and not use_bottom and prev_pairs:
@@ -309,6 +322,7 @@ class PositiveAgent:
             bottom_n = max(1, min(2, n // 3))
             use_top = prev_pairs[:top_n]
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
+            
 
         # 展示 Top 因子（详细）
         if use_top:
@@ -325,6 +339,21 @@ class PositiveAgent:
                 history_block += f"```python\n{code[:250]}\n```\n"
                 if strengths:
                     history_block += f"✓ Key Strengths: {strengths}\n"
+                history_block += "\n"
+        if use_middle:
+            history_block += "=== MIDDLE-PERFORMING FACTORS (Improve these) ===\n\n"
+            for i, p in enumerate(use_middle, 1):
+                code = p.get('code', '').strip()
+                report = p.get('report', '').strip()
+                score = p.get('train_score', 'N/A')
+                strengths = self._extract_strengths(report)
+                weaknesses = self._extract_weaknesses(report)
+                history_block += f"Middle Factor #{i} (Train Score: {score}):\n"
+                history_block += f"```python\n{code[:200]}\n```\n"
+                if strengths:
+                    history_block += f"✓ Potential: {strengths}\n"
+                if weaknesses:
+                    history_block += f"✗ To Improve: {weaknesses}\n"
                 history_block += "\n"
 
         # 展示 Bottom 因子（简要，作为负例）
@@ -357,7 +386,8 @@ class PositiveAgent:
             "**Learning Strategy:**\n" +
             "1. BUILD ON top factors: Use similar calculation patterns, field combinations, and transformations\n" +
             "2. AVOID bottom factors: Don't repeat their mistakes (high drawdown, low coverage, poor diversification)\n" +
-            "3. INTRODUCE VARIATIONS: Don't copy exactly - try different field ratios, time windows, or normalizations\n\n" +
+            "3. IMPROVE middle factors: they have potential but need refinement\n" +
+            "4. INTRODUCE VARIATIONS: Don't copy exactly - try different field ratios, time windows, or normalizations\n\n" +
             "**Code-Level Guidelines:**\n" +
             "- Use robust transformations on pandas Series: (data['col1']/data['col2']).rank(), .rolling().mean()\n" +
             "- Remember: Call pandas methods (.rank, .rolling) on data['col'] or expressions, NOT on np.where()\n" +
