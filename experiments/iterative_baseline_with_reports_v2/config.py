@@ -4,7 +4,7 @@ from pathlib import Path
 # === 基础配置（复用 iterative_baseline）===
 MAX_ROUNDS = 3
 FACTORS_PER_ROUND = 10
-RESULTS_DIR = results_dir("iterative_baseline_with_reports")
+RESULTS_DIR = results_dir("iterative_baseline_with_reports_v2")
 BASELINE_FILE = results_dir("factor_baseline") / "baseline_factor_metrics.csv"
 LOGS_DIR = RESULTS_DIR / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
