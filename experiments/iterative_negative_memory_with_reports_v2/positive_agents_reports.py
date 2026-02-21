@@ -223,12 +223,20 @@ class PositiveAgents:  # ← 类名改为复数
         # 分离 Top 和 Bottom（只从正样本中选）
         positives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'positive']
         negatives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'negative']
-        
-        top_k = min(3, len(positives))
+
+        # v2: top-4, middle-3, bottom-0, negative-3
+        top_k = min(4, len(positives))
+        middle_k = 3
         bottom_k = 0
         
         top_factors = positives[:top_k] if positives else []
-        bottom_factors = positives[-bottom_k:] if len(positives) > bottom_k else []
+        
+        # middle: 从 top_k 之后取 middle_k 个
+        middle_start = top_k
+        middle_end = min(top_k + middle_k, len(positives))
+        middle_factors = positives[middle_start:middle_end] if len(positives) > middle_start else []
+        
+        bottom_factors = []  # bottom_k=0，不展示
         
         # 负样本单独处理（作为反面教材）
         negative_factors = negatives[:3] if negatives else []
@@ -252,6 +260,7 @@ class PositiveAgents:  # ← 类名改为复数
                 prev_pairs=prev_pairs,
                 target_n=batch,
                 top_factors=top_factors,
+                middle_factors=middle_factors,  # ← 新增
                 bottom_factors=bottom_factors,
                 negative_factors=negative_factors  # ← 传入负样本
             )
@@ -355,6 +364,7 @@ class PositiveAgents:  # ← 类名改为复数
         prev_pairs: List[Dict],
         target_n: int,
         top_factors: Optional[List[Dict]] = None,
+        middle_factors: Optional[List[Dict]] = None,  # ← 新增
         bottom_factors: Optional[List[Dict]] = None,
         negative_factors: Optional[List[Dict]] = None  # ← 新增负样本
     ) -> str:
@@ -402,6 +412,23 @@ class PositiveAgents:  # ← 类名改为复数
                 history_block += f"```python\n{code}\n```\n"
                 if strengths:
                     history_block += f"✓ Strengths: {strengths}\n"
+                history_block += "\n"
+
+        # ========== Middle 因子（参考对象）========== #
+        use_middle = middle_factors if middle_factors else []
+        if use_middle:
+            history_block += "=== MIDDLE-PERFORMING FACTORS (Reference - room for improvement) ===\n\n"
+            for i, p in enumerate(use_middle, 1):
+                code = p.get('code', '').strip()[:250]
+                report = p.get('report', '').strip()
+                score = p.get('train_score', 'N/A')
+                
+                history_block += f"Mid #{i} (Train Score: {score:.4f}):\n" if isinstance(score, (int, float)) else f"Mid #{i}:\n"
+                history_block += f"```python\n{code}\n```\n"
+                if report:
+                    # 简短摘要
+                    summary = report[:150].strip()
+                    history_block += f"→ Analysis: {summary}...\n"
                 history_block += "\n"
 
         # ========== Bottom 因子（避免错误）========== #
