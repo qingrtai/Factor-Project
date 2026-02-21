@@ -119,40 +119,29 @@ class PositiveAgents:  # ← 类名改为复数
         id_prefix: str,
         memory_records: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """
-        生成因子（适配 iterator 调用）
-        
-        Args:
-            current_round: 当前轮次
-            target_n: 目标生成数量
-            id_prefix: 因子 ID 前缀（如 "r2_"）
-            memory_records: 记忆列表
-                格式: [{"code": "...", "factor_report": "...", "memory_type": "positive"}, ...]
-        
-        Returns:
-            [{"factor_id": "r2_01", "code": "..."}, ...]
-        """
         self.logger.info(
             f"[positive] Round {current_round}: 生成 {target_n} 个因子 "
             f"(记忆数: {len(memory_records)})"
         )
         
         # ========== Step 1: 转换格式 ========== #
-        # memory_records → previous_factors
         previous_factors = []
+        existing_codes = []  # ← 新增：收集所有历史代码用于去重
+        
         for rec in memory_records:
             code = str(rec.get('code', '')).strip()
             if not code:
                 continue
             
+            existing_codes.append(code)  # ← 记录已有代码
             previous_factors.append({
                 'code': code,
-                'report': rec.get('factor_report', ''),  # ← factor_report → report
-                'train_score': rec.get('train_score', 0),  # 用于排序
+                'report': rec.get('factor_report', ''),
+                'train_score': rec.get('train_score', 0),
                 'memory_type': rec.get('memory_type', 'positive')
             })
         
-        self.logger.info(f"[positive]   - 有效记忆: {len(previous_factors)}")
+        self.logger.info(f"[positive]   - 有效记忆: {len(previous_factors)}, 已有代码: {len(existing_codes)}")
         
         # ========== Step 2: 调用内部生成逻辑 ========== #
         codes = self.generate_optimized_factors(
@@ -160,7 +149,7 @@ class PositiveAgents:  # ← 类名改为复数
             round_num=current_round,
             n_override=target_n,
             save_response=True,
-            existing_codes=None
+            existing_codes=existing_codes  # ← 从 None 改为 existing_codes
         )
         
         # ========== Step 3: 转换返回格式 ========== #
