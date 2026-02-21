@@ -36,14 +36,7 @@ QUANTILES = (0.10, 0.20, 0.25, 0.30)
 # ========== IMPROVED: Sharpe 阈值配置 ========== #
 # 根据样本量动态调整阈值
 def get_sharpe_threshold(sample_size: int) -> float:
-    """
-    根据样本量返回合理的 Sharpe 阈值
-    
-    原理：
-    - 小样本（< 60）：Sharpe 估计不稳定，放宽到 3.5
-    - 大样本（>= 60）：使用标准阈值 2.5
-    """
-    return 3.5 if sample_size < 60 else 2.5
+    return 5.0  # 统一放宽阈值
 # =============================================== #
 
 # 输出列
