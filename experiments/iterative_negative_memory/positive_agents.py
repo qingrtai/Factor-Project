@@ -281,18 +281,6 @@ def _build_ultra_strict_prompt(
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
     
-    return f"""You are generating factor formulas. Follow these examples EXACTLY:
-    
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    TOP PERFORMING FACTORS (COPY THEIR STRUCTURE)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    {pos_block}
-    
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
     EVERY factor MUST follow this EXACT 2-line structure:
     
     Line 1: data['factor_score'] = np.where(data['DENOM']==0, 0, EXPRESSION/data['DENOM'])
