@@ -278,26 +278,40 @@ class FactorIterator:
         )
         
         return final
-    
+        
     def _evaluate_factors(self, factors: List[Dict[str, Any]]) -> Optional[pd.DataFrame]:
         if not factors:
             return None
         
         try:
-            # ========== 修改：使用实例变量 ========== #
             df = batch_evaluate(
                 factors=factors,
                 splits=self.memory_manager.splits,
                 ret_col="ret",
                 date_col="datadate",
-                periods_per_year=self.periods_per_year  # ← 改为使用实例变量
+                periods_per_year=self.periods_per_year
             )
-            # ======================================== #
-            return df
             
-        except Exception as e:
-            self.logger.error(f"评估失败: {e}")
-            return None
+            # 过拟合过滤
+            MAX_RATIO = 12.0
+            if df is not None and not df.empty:
+                if 'val_score' in df.columns and 'train_score' in df.columns:
+                    val = pd.to_numeric(df['val_score'], errors='coerce').abs()
+                    train = pd.to_numeric(df['train_score'], errors='coerce').abs()
+                    ratio = val / train.replace(0, float('nan'))
+                    overfit_mask = ratio > MAX_RATIO
+                    n_filtered = int(overfit_mask.sum())
+                    if n_filtered > 0:
+                        self.logger.warning(f"⚠️ 过滤掉 {n_filtered} 个严重过拟合因子 (|val/train| > {MAX_RATIO}x)")
+                        df = df[~overfit_mask].reset_index(drop=True)
+            
+            return df
+        
+    except Exception as e:
+        self.logger.error(f"评估失败: {e}")
+        return None
+    
+
     
     def _compute_round_stats(
         self,
