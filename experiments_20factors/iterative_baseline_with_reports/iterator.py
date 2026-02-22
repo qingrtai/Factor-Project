@@ -289,6 +289,17 @@ class IterativeOptimizer:
 
                 df_eval = self._evaluate_codes(pending_codes)
                 if df_eval is not None and not df_eval.empty:
+                    # 新增：过拟合过滤
+                    MAX_RATIO = 12.0
+                    if 'val_score' in df_eval.columns and 'train_score' in df_eval.columns:
+                        val = pd.to_numeric(df_eval['val_score'], errors='coerce').abs()
+                        train = pd.to_numeric(df_eval['train_score'], errors='coerce').abs()
+                        ratio = val / train.replace(0, float('nan'))
+                        overfit_mask = ratio > MAX_RATIO
+                        n_filtered = int(overfit_mask.sum())
+                        if n_filtered > 0:
+                            self.logger.warning(f"⚠️ 过滤掉 {n_filtered} 个严重过拟合因子 (|val/train| > {MAX_RATIO}x)")
+                            df_eval = df_eval[~overfit_mask].reset_index(drop=True)
                     # 去重
                     df_eval['__key__'] = (
                         df_eval['code'].astype(str)
