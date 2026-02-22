@@ -19,7 +19,7 @@ EARLY_STOPPING_PATIENCE = 999  # 设置很大的值，实际上禁用早停
 MIN_DELTA = 0.001             # 提升阈值（不重要，因为 patience 很大）
 MIN_ROUNDS = 3                # 最少运行3轮（等于 MAX_ROUNDS，强制跑满）
 VAL_SCORE_THRESHOLD = None    # 不设阈值早停
-MAX_TOKENS = 1800
+MAX_TOKENS = 2200
 
 # CONFIG 字典（兼容 run_iterative.py）
 CONFIG = {
@@ -35,7 +35,7 @@ CONFIG = {
     "MIN_ROUNDS": MIN_ROUNDS,
     "VAL_SCORE_THRESHOLD": VAL_SCORE_THRESHOLD,
     "TOP_K_FACTORS": 20,  # ← 添加这一行
-    "MAX_TOKENS": 1800,  # 20个因子需要更多token
+    "MAX_TOKENS": 2200,  # 20个因子需要更多token
 }
 
 # 校验函数
