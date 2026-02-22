@@ -141,10 +141,13 @@ class PositiveAgent:
         prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
 
         # 分离 top 和 bottom
-        top_k = min(4, len(prev_pairs_with_score))
-        bottom_k = min(2, len(prev_pairs_with_score))
-
+        top_k = min(7, len(prev_pairs_with_score))
+        bottom_k = min(7, len(prev_pairs_with_score))
+        middle_start = top_k
+        middle_end = max(top_k, len(prev_pairs_with_score) - bottom_k)
+        
         top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
+        middle_factors = prev_pairs_with_score[middle_start:middle_end] if middle_end > middle_start else []
         bottom_factors = prev_pairs_with_score[-bottom_k:] if len(prev_pairs_with_score) > bottom_k else []
 
         # 更新原来的 prev_pairs（保持兼容性）
@@ -165,6 +168,7 @@ class PositiveAgent:
                 prev_pairs, 
                 batch,
                 top_factors=top_factors,      # 传入 top 因子
+                middle_factors=middle_factors,  # 新增
                 bottom_factors=bottom_factors  # 传入 bottom 因子
             )
             self.logger.info(f"Round {round_num}: 调用 GPT 生成 {batch} 个新因子")
@@ -254,6 +258,7 @@ class PositiveAgent:
         prev_pairs: List[Dict],  # 保持不变
         target_n: int,
         top_factors: Optional[List[Dict]] = None,    # 新增
+        middle_factors: Optional[List[Dict]] = None,  # 新增
         bottom_factors: Optional[List[Dict]] = None   # 新增
     ) -> str:
         """
@@ -326,6 +331,15 @@ class PositiveAgent:
                 if strengths:
                     history_block += f"✓ Key Strengths: {strengths}\n"
                 history_block += "\n"
+        # 展示 Middle 因子（只展示代码+分数，无报告）
+        use_middle = middle_factors if middle_factors else []
+        if use_middle:
+            history_block += "=== AVERAGE FACTORS (For reference - neither good nor bad) ===\n\n"
+            for i, p in enumerate(use_middle, 1):
+                code = p.get('code', '').strip()
+                score = p.get('train_score', 'N/A')
+                history_block += f"Average Factor #{i} (Train Score: {score}):\n"
+                history_block += f"```python\n{code[:200]}\n```\n\n"
 
         # 展示 Bottom 因子（简要，作为负例）
         if use_bottom:
@@ -682,10 +696,13 @@ class PositiveAgent:
             items = obj["factors"]
             out: List[str] = []
             for it in items:
-                if not isinstance(it, dict):
+                if isinstance(it, str):
+                    code = it.strip()
+                elif isinstance(it, dict):
+                    code = str(it.get("code", "")).strip()
+                else:
                     reject.append("item_not_object")
                     continue
-                code = str(it.get("code", "")).strip()
                 if not code:
                     reject.append("empty_code")
                     continue
