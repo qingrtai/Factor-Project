@@ -243,6 +243,8 @@ class MemoryManager:
             memory.append({
                 "code": r.get("code", ""),
                 "factor_report": r.get("factor_report", ""),  # ← 使用报告（只含 train 指标）
+                "train_score": r.get("train_score", 0),      # ← 新增
+                "val_score": r.get("val_score", -999),       # ← 新增
                 "memory_type": "positive",
             })
         
@@ -251,6 +253,8 @@ class MemoryManager:
             memory.append({
                 "code": r.get("code", ""),
                 "factor_report": r.get("factor_report", ""),  # ← 使用报告
+                 "train_score": r.get("train_score", 0),      # ← 新增
+                 "val_score": r.get("val_score", -999),       # ← 新增
                 "memory_type": "negative",
             })
         
