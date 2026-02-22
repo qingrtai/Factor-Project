@@ -271,30 +271,38 @@ class PositiveAgent:
         if reasons:
             reasons_txt = "Previously rejected reasons: " + "; ".join(set(reasons[:6])) + "\n"
         
-        # ← 新增：列出已生成的因子（让 GPT 避开）
         existing_txt = ""
         if existing_codes:
-            # 只显示前 10 个（避免 prompt 太长）
             shown = existing_codes[:10]
             existing_txt = (
-                "CRITICAL - ALREADY GENERATED (DO NOT REPEAT):\n" +
-                "\n".join(f"  - {code[:120]}" for code in shown) +  # 每个代码只显示前 120 字符
-                "\n\n**YOU MUST GENERATE COMPLETELY DIFFERENT FACTORS!**\n" +
-                "Use different field combinations, different calculations!\n\n"
+                "ALREADY GENERATED (DO NOT REPEAT):\n" +
+                "\n".join(f"  - {code[:120]}" for code in shown) +
+                "\n\n**GENERATE COMPLETELY DIFFERENT FACTORS!**\n\n"
             )
+        
+        # ← 新增：明确的格式模板
+        example = (
+            "data['factor_score']=pd.Series(np.where(data['atq']==0,0,"
+            "data['ibq']/data['atq']),index=data.index).replace([np.inf,-np.inf],np.nan).fillna(0)"
+        )
         
         return (
             "REFILL REQUEST:\n" +
             reasons_txt +
-            existing_txt +  # ← 加入已生成的因子列表
-            f"Generate EXACTLY {missing} NEW and UNIQUE factors.\n" +
-            "Return ONLY JSON {\"factors\":[...]} with EXACTLY "
-            f"{missing} items, same STRICT rules (single statement only). "
-            "JSON schema: factors = Array of objects with keys {id: string, code: string}. "
-            "Do NOT return an array of strings; it will be discarded.\n" +
-            self._whitelist_block() +
-            "Do not use semicolons, no second assignment, no code fences, no `json` prefix."
+            existing_txt +
+            # ← 关键：重申格式要求
+            "CRITICAL FORMAT RULES (violations will be discarded):\n"
+            "1. Each code MUST start with: data['factor_score'] = pd.Series(...)\n"
+            "2. NO bare column names like: (revtq - cogsq) / saleq  ← WRONG\n"
+            "3. ALL columns MUST use: data['colname']  ← CORRECT\n"
+            "4. ONE single statement only, no semicolons\n\n"
+            f"VALID EXAMPLE:\n{example}\n\n" +
+            f"Generate EXACTLY {missing} NEW factors.\n"
+            f"Return ONLY JSON {{\"factors\":[...]}} with EXACTLY {missing} items.\n" +
+            self._whitelist_block()
         )
+
+
 
     def _build_strict_prompt(self, target_n: int, prev_pairs: List[Dict]) -> str:
         return (
