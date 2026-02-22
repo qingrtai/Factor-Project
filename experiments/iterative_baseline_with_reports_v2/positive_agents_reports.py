@@ -131,12 +131,13 @@ class PositiveAgent:
                 continue
             report = str(f.get('report', '')).strip()
             val_score = f.get('val_score', -999)  # 用于排序
+            train_score_val = f.get('train_score', -999)  # 用于展示给GPT
             
             prev_pairs_with_score.append({
                 'code': code, 
                 'report': report, 
-                'train_score': train_score,
-                'val_score': val_score,             
+                'train_score': train_score_val,  # ← 修复 NameError
+                'val_score': val_score,          # ← 用于内部排序，不传给GPT             
             })
 
         # 按 val_score 排序
