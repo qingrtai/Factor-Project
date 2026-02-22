@@ -331,7 +331,7 @@ class IterativeOptimizer:
                 df['_val_train_ratio'] = df['val_score'] / df['train_score'].replace(0, 0.001)
                 
                 # 设定阈值（保留 6x 以下的，过滤 8x 以上的）
-                MAX_RATIO = 8.0
+                MAX_RATIO = 12.0
                 
                 before = len(df)
                 # 过滤掉比值过高的（绝对值）
