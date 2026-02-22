@@ -3,7 +3,7 @@ from pathlib import Path
 
 # === 基础配置（复用 iterative_baseline）===
 MAX_ROUNDS = 3
-FACTORS_PER_ROUND = 10
+FACTORS_PER_ROUND = 20
 RESULTS_DIR = results_dir("iterative_baseline_with_reports")
 BASELINE_FILE = results_dir("factor_baseline") / "baseline_factor_metrics.csv"
 LOGS_DIR = RESULTS_DIR / "logs"
@@ -16,12 +16,12 @@ REPORT_TEMPERATURE = 0.7
 GENERATE_REPORTS_FOR = "ranked"  # 改为 "ranked"：top 3 详细报告 + bottom 3 简要报告
 
 # === 因子生成配置 ===
-FACTOR_GENERATION_MAX_TOKENS = 1200  # 增加到 1200（原来 900）
+FACTOR_GENERATION_MAX_TOKENS = 2200  # 增加到 2200（原来 900）
 GENERATION_TEMPERATURE = 0.8  # 新增：生成因子时的温度
 
 # === 报告策略（新增）===
-TOP_K_DETAILED = 3  # 前 K 个生成详细报告
-BOTTOM_K_BRIEF = 3  # 后 K 个生成简要报告（作为负例）
+TOP_K_DETAILED = 7  # 前 K 个生成详细报告
+BOTTOM_K_BRIEF = 7  # 后 K 个生成简要报告（作为负例）
 INCLUDE_COMPARATIVE_ANALYSIS = True  # 在提示词中包含对比分析
 
 # === 因子生成配置 ===
@@ -101,7 +101,7 @@ def print_config_summary():
     print("\n[报告生成配置]")
     print(f"  模板文件: {REPORT_TEMPLATE_FILE}")
     print(f"  报告 max tokens: {REPORT_MAX_TOKENS} (提升到 600)")
-    print(f"  生成 max tokens: {FACTOR_GENERATION_MAX_TOKENS} (提升到 1200)")
+    print(f"  生成 max tokens: {FACTOR_GENERATION_MAX_TOKENS} (提升到 2200)")
     print(f"  生成温度: {GENERATION_TEMPERATURE}")
     print(f"  报告策略: Top {TOP_K_DETAILED} 详细 + Bottom {BOTTOM_K_BRIEF} 简要")
     print(f"  对比分析: {INCLUDE_COMPARATIVE_ANALYSIS}")
