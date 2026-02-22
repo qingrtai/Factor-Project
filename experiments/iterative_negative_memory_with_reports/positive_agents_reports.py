@@ -138,6 +138,7 @@ class PositiveAgents:  # ← 类名改为复数
                 'code': code,
                 'report': rec.get('factor_report', ''),
                 'train_score': rec.get('train_score', 0),
+                'val_score': rec.get('val_score', -999),      # ← 新增
                 'memory_type': rec.get('memory_type', 'positive')
             })
         
@@ -203,11 +204,12 @@ class PositiveAgents:  # ← 类名改为复数
                 'code': code, 
                 'report': report, 
                 'train_score': train_score,
+                'val_score': f.get('val_score', -999),        # ← 新增
                 'memory_type': memory_type
             })
 
-        # 按 train_score 排序（降序）
-        prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
+        # 按 val_score 排序（降序）
+        prev_pairs_with_score.sort(key=lambda x: x.get('val_score', -999), reverse=True)
 
         # 分离 Top 和 Bottom（只从正样本中选）
         positives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'positive']
