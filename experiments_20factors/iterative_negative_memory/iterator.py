@@ -307,9 +307,9 @@ class FactorIterator:
             
             return df
         
-    except Exception as e:
-        self.logger.error(f"评估失败: {e}")
-        return None
+        except Exception as e:
+            self.logger.error(f"评估失败: {e}")
+            return None
     
 
     
