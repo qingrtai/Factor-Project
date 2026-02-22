@@ -6,6 +6,7 @@ FIXED VERSION:
 1. Added periods_per_year configuration reading
 2. Use self.periods_per_year in batch_evaluate() call
 3. Simplified memory strategy (100% baseline -> 100% previous round)
+4. FIXED: 按 val_score 筛选 Top10（而非 train_score），避免过拟合
 """
 
 import os
@@ -46,6 +47,10 @@ class MemoryManager:
     2. 生成负样本（代码 + 评估 + 报告）
     3. 合并记忆：只保留 code + factor_report + memory_type
     4. 保存结果
+    
+    关键改动：
+    - 按 val_score 筛选 Top10（用于记忆选择）
+    - 但报告中只包含 train 指标（不泄露 val）
     """
     
     def __init__(self):
@@ -78,11 +83,13 @@ class MemoryManager:
     
     def get_memory_for_round(self, round_num: int) -> List[Dict]:
         """
-        返回上一轮的 Top10 因子（FIXED: 简化策略）
+        返回上一轮的 Top10 因子（FIXED: 按 val_score 筛选）
         
         策略：
-        - Round 1: 100% baseline (Top 10)
-        - Round 2+: 100% previous round (Top 10)
+        - Round 1: 100% baseline (Top 10 by val_score)
+        - Round 2+: 100% previous round (Top 10 by val_score)
+        
+        关键：用 val_score 筛选，但不泄露给 GPT（报告只含 train 指标）
         """
         # ========== Round 1: 100% baseline ========== #
         if round_num == 1:
@@ -98,18 +105,19 @@ class MemoryManager:
                 self.logger.warning(f"[memory] Baseline 缺少 factor_report 列，使用空字符串")
                 df["factor_report"] = ""
             
-            # 按 train_score 排序
-            df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
-            top10 = df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            # ========== FIXED: 按 val_score 排序 ========== #
+            df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
+            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(10)
+            # ============================================== #
             
             positives = top10.to_dict(orient="records")
             
             self.logger.info(
-                f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本"
+                f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本 (按 val_score 筛选)"
             )
             if len(top10) > 0:
-                train_range = f"[{top10['train_score'].min():.4f}, {top10['train_score'].max():.4f}]"
-                self.logger.info(f"  - Train score 范围: {train_range}")
+                val_range = f"[{top10['val_score'].min():.4f}, {top10['val_score'].max():.4f}]"
+                self.logger.info(f"  - Val score 范围: {val_range}")
             
             return positives
         
@@ -127,9 +135,10 @@ class MemoryManager:
                 self.logger.warning(f"[memory] Round {round_num-1} 缺少 factor_report 列，使用空字符串")
                 prev_df["factor_report"] = ""
             
-            # 按 train_score 排序
-            prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
-            top10 = prev_df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            # ========== FIXED: 按 val_score 排序 ========== #
+            prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
+            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(10)
+            # ============================================== #
             
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
@@ -137,14 +146,14 @@ class MemoryManager:
         positives = top10.to_dict(orient="records")
         
         self.logger.info(
-            f"[memory] Round {round_num} 使用 100% round {round_num-1}: {len(positives)} 个正样本"
+            f"[memory] Round {round_num} 使用 100% round {round_num-1}: {len(positives)} 个正样本 (按 val_score 筛选)"
         )
         
         if len(positives) > 0:
-            train_scores = [float(p.get("train_score", 0)) for p in positives]
-            train_range = f"[{min(train_scores):.4f}, {max(train_scores):.4f}]"
-            self.logger.info(f"  - Train score 范围: {train_range}")
-            self.logger.info(f"  - Train score 均值: {np.mean(train_scores):.4f}")
+            val_scores = [float(p.get("val_score", 0)) for p in positives]
+            val_range = f"[{min(val_scores):.4f}, {max(val_scores):.4f}]"
+            self.logger.info(f"  - Val score 范围: {val_range}")
+            self.logger.info(f"  - Val score 均值: {np.mean(val_scores):.4f}")
         
         return positives
     
@@ -225,7 +234,7 @@ class MemoryManager:
         合并正负样本记忆
         
         **关键改动**：只保留 code + factor_report + memory_type
-        （不再包含 train_score，避免泄露）
+        （不再包含 train_score / val_score，避免泄露）
         """
         memory = []
         
@@ -233,7 +242,7 @@ class MemoryManager:
         for r in positives:
             memory.append({
                 "code": r.get("code", ""),
-                "factor_report": r.get("factor_report", ""),  # ← 使用报告
+                "factor_report": r.get("factor_report", ""),  # ← 使用报告（只含 train 指标）
                 "memory_type": "positive",
             })
         
