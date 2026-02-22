@@ -3,7 +3,7 @@ from pathlib import Path
 
 # 实验特定配置
 MAX_ROUNDS = 3
-FACTORS_PER_ROUND = 10
+FACTORS_PER_ROUND = 20
 
 # 路径
 RESULTS_DIR = results_dir("iterative_baseline")
