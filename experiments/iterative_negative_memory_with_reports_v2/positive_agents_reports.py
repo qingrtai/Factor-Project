@@ -137,22 +137,24 @@ class PositiveAgents:  # ← 类名改为复数
             f"(记忆数: {len(memory_records)})"
         )
         
-        # ========== Step 1: 转换格式 ========== #
-        # memory_records → previous_factors
+       # ========== Step 1: 转换格式 ========== #
         previous_factors = []
+        existing_codes = []  # ← 新增
+        
         for rec in memory_records:
             code = str(rec.get('code', '')).strip()
             if not code:
                 continue
             
+            existing_codes.append(code)  # ← 新增
             previous_factors.append({
                 'code': code,
-                'report': rec.get('factor_report', ''),  # ← factor_report → report
-                'train_score': rec.get('train_score', 0),  # 用于排序
+                'report': rec.get('factor_report', ''),
+                'train_score': rec.get('train_score', 0),
                 'memory_type': rec.get('memory_type', 'positive')
             })
         
-        self.logger.info(f"[positive]   - 有效记忆: {len(previous_factors)}")
+        self.logger.info(f"[positive]   - 有效记忆: {len(previous_factors)}, 已有代码: {len(existing_codes)}")
         
         # ========== Step 2: 调用内部生成逻辑 ========== #
         codes = self.generate_optimized_factors(
@@ -160,7 +162,7 @@ class PositiveAgents:  # ← 类名改为复数
             round_num=current_round,
             n_override=target_n,
             save_response=True,
-            existing_codes=None
+            existing_codes=existing_codes  # ← 从 None 改为 existing_codes
         )
         
         # ========== Step 3: 转换返回格式 ========== #
