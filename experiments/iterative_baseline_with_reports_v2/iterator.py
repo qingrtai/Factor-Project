@@ -202,7 +202,7 @@ class IterativeOptimizer:
         t0 = time.time()
         self.logger.info(f"\n{'='*20} 第 {round_num} 轮开始 {'='*20}")
         try:
-            # Step 1: 读取上一轮记忆（codes + reports）← 核心改动
+            # Step 1: 读取上一轮记忆（codes + reports + train_score + val_score）
             self.logger.info("Step 1: 读取上一轮记忆...")
             codes, reports = self.memory_manager.load_memory(previous_round=round_num - 1)
             
@@ -213,14 +213,17 @@ class IterativeOptimizer:
             self.logger.info(f"读取了 {len(codes)} 个因子的记忆")
             has_reports = any(r.strip() for r in reports)
             self.logger.info(f"报告可用性: {'有报告' if has_reports else '无报告（可能是 baseline）'}")
-
-            # 新增：读取 train_score 用于排序和分组
+            
+            # 确定上一轮 CSV 路径
             if round_num == 1:
                 prev_csv = self.memory_manager.baseline_csv
             else:
                 prev_csv = self.memory_manager._round_csv_path(round_num - 1)
-
-            train_scores = []
+            
+            # 读取 train_score 和 val_score（合并为一次读取）
+            train_scores = [-999] * len(codes)
+            val_scores = [-999] * len(codes)
+            
             if prev_csv.exists():
                 try:
                     df_prev = pd.read_csv(prev_csv)
@@ -228,37 +231,42 @@ class IterativeOptimizer:
                         train_scores = df_prev['train_score'].fillna(-999).tolist()
                     else:
                         self.logger.warning("上一轮 CSV 缺少 train_score 列，使用默认值 -999")
-                        train_scores = [-999] * len(codes)
+                    if 'val_score' in df_prev.columns:
+                        val_scores = df_prev['val_score'].fillna(-999).tolist()
+                    else:
+                        self.logger.warning("上一轮 CSV 缺少 val_score 列，使用默认值 -999")
                 except Exception as e:
-                    self.logger.warning(f"读取上一轮 CSV 失败: {e}，使用默认 train_score")
-                    train_scores = [-999] * len(codes)
+                    self.logger.warning(f"读取上一轮 CSV 失败: {e}，使用默认分数")
             else:
-                self.logger.warning("上一轮 CSV 不存在，使用默认 train_score")
-                train_scores = [-999] * len(codes)
-
+                self.logger.warning("上一轮 CSV 不存在，使用默认 train_score / val_score")
+            
             # 确保长度一致
             if len(train_scores) != len(codes):
                 self.logger.warning(f"train_scores 长度 {len(train_scores)} 与 codes 长度 {len(codes)} 不一致，补齐")
                 train_scores = train_scores[:len(codes)] + [-999] * max(0, len(codes) - len(train_scores))
-
-            self.logger.info(f"读取了 {len(train_scores)} 个 train_score")
-
-            # Step 2: 生成新因子（基于报告学习）← 核心改动
-            self.logger.info(f"Step 2: 生成新因子（基于报告学习）")
+            if len(val_scores) != len(codes):
+                self.logger.warning(f"val_scores 长度 {len(val_scores)} 与 codes 长度 {len(codes)} 不一致，补齐")
+                val_scores = val_scores[:len(codes)] + [-999] * max(0, len(codes) - len(val_scores))
+            
+            self.logger.info(f"读取了 {len(train_scores)} 个 train_score，{len(val_scores)} 个 val_score")
+            
+            # 构建 previous_factors（供后续所有 generate_optimized_factors 调用使用）
             previous_factors = [
-                {'code': c, 'report': r, 'train_score': s}  # ← 添加 train_score
-                for c, r, s in zip(codes, reports, train_scores)
+                {'code': c, 'report': r, 'train_score': ts, 'val_score': vs}
+                for c, r, ts, vs in zip(codes, reports, train_scores, val_scores)
             ]
-
+            
+            # Step 2: 生成新因子
+            self.logger.info("Step 2: 生成新因子（基于报告学习）")
             existing_codes = self._collect_existing_codes(round_num - 1)
             new_codes = self.positive_agent.generate_optimized_factors(
-                previous_factors=previous_factors,  # ← 传入报告
+                previous_factors=previous_factors,
                 round_num=round_num,
                 save_response=True,
                 n_override=self.factors_per_round,
                 existing_codes=existing_codes
             )
-            self.total_factors_generated += len(new_codes)
+            self.total_factors_generated += len(new_codes)  # ← 这行需要补上
 
             # Step 3: 评估新因子（含补货）
             self.logger.info("Step 3: 评估新因子（含自动补货）")
