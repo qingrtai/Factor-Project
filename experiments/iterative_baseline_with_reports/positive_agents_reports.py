@@ -123,22 +123,25 @@ class PositiveAgent:
 
         # 在上面代码块后面添加以下代码：
         # ========== 新增：对因子进行排序和分组 ========== #
-        # 尝试从 previous_factors 中获取 train_score 用于排序
+        # 尝试从 previous_factors 中获取 val_score 用于排序
         prev_pairs_with_score = []
         for f in previous_factors or []:
             code = str(f.get('code', '')).strip()
             if not code:
                 continue
             report = str(f.get('report', '')).strip()
-            train_score = f.get('train_score', -999)  # 用于排序
+            val_score = f.get('val_score', -999)
+            train_score = f.get('train_score', -999)  #  用于展示给GPT
+            
             prev_pairs_with_score.append({
                 'code': code, 
                 'report': report, 
-                'train_score': train_score
+                'train_score': train_score,  # ← 修复 NameError
+                'val_score': val_score,          # ← 用于内部排序，不传给GPT
             })
 
-        # 按 train_score 排序
-        prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
+        # 按 val_score 排序
+        prev_pairs_with_score.sort(key=lambda x: x.get('val_score', -999), reverse=True)
 
         # 分离 top 和 bottom
         top_k = min(4, len(prev_pairs_with_score))
