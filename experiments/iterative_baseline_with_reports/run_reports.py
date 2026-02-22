@@ -185,34 +185,36 @@ def run_single_round(round_num: int) -> pd.DataFrame:
         has_reports = any(r.strip() for r in reports)
         logger.info(f"报告可用性: {'有报告' if has_reports else '无报告（可能是 baseline）'}")
 
-        # 读取 train_score（与 iterator.py 保持一致）
+        # 读取 train_score 和 val_score（合并为一次读取）
         if round_num == 1:
             prev_csv = memory_manager.baseline_csv
         else:
             prev_csv = memory_manager._round_csv_path(round_num - 1)
-
-        train_scores = []
+        
+        train_scores = [-999] * len(codes)
+        val_scores = [-999] * len(codes)
+        
         if prev_csv.exists():
             try:
                 df_prev = pd.read_csv(prev_csv)
                 if 'train_score' in df_prev.columns:
                     train_scores = df_prev['train_score'].fillna(-999).tolist()
-                else:
-                    train_scores = [-999] * len(codes)
+                if 'val_score' in df_prev.columns:
+                    val_scores = df_prev['val_score'].fillna(-999).tolist()
             except Exception:
-                train_scores = [-999] * len(codes)
-        else:
-            train_scores = [-999] * len(codes)
-
+                pass
+        
         # 确保长度一致
         if len(train_scores) != len(codes):
             train_scores = train_scores[:len(codes)] + [-999] * max(0, len(codes) - len(train_scores))
-
-        # 生成新因子（基于报告学习）
+        if len(val_scores) != len(codes):
+            val_scores = val_scores[:len(codes)] + [-999] * max(0, len(codes) - len(val_scores))
+        
+        # 构建 previous_factors（含 val_score，供内部排序用）
         previous_factors = [
-            {'code': c, 'report': r, 'train_score': s}  # ← 添加 train_score
-            for c, r, s in zip(codes, reports, train_scores)
-]
+            {'code': c, 'report': r, 'train_score': ts, 'val_score': vs}
+            for c, r, ts, vs in zip(codes, reports, train_scores, val_scores)
+        ]
         
         new_codes = positive_agent.generate_optimized_factors(
             previous_factors=previous_factors,
