@@ -73,6 +73,11 @@ class MemoryManager:
             df = pd.read_csv(csv_path)
             df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
             top10 = df.sort_values("val_score", ascending=False, na_position="last").head(20)
+
+            # 新增：过滤负收益因子
+            top10 = top10[top10["val_score"] > 0]
+            if len(top10) == 0:
+                top10 = df.sort_values("val_score", ascending=False, na_position="last").head(5)
             
             positives = top10.to_dict(orient="records")
             
@@ -95,6 +100,10 @@ class MemoryManager:
             prev_df = pd.read_csv(prev_path)
             prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
             top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(20)
+            # 新增：过滤负收益因子
+            top10 = top10[top10["val_score"] > 0]
+            if len(top10) == 0:
+                top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(5)
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
         
