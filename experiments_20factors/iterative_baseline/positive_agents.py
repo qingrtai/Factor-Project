@@ -478,10 +478,13 @@ class PositiveAgent:
             items = obj["factors"]
             out: List[str] = []
             for it in items:
-                if not isinstance(it, dict):
+                if isinstance(it, str):
+                    code = it.strip()
+                elif isinstance(it, dict):
+                    code = str(it.get("code", "")).strip()
+                else:
                     reject.append("item_not_object")
                     continue
-                code = str(it.get("code", "")).strip()
                 if not code:
                     reject.append("empty_code")
                     continue
