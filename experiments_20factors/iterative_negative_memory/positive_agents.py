@@ -58,23 +58,20 @@ BASE_MIN_SIM = float(POS_CFG.get("min_code_similarity", 0.70))
 BATCH_SIZE = int(POS_CFG.get("batch_size", 20))
 
 
-def _must_have_np_where(code: str) -> bool:
+def _is_valid_format(code: str) -> bool:
     """
-    强制检查：代码必须包含 np.where
-    
-    这是最关键的检查，在所有其他检查之前
+    支持多种因子格式：
+    - Format A (ratio): np.where(denom==0, 0, numer/denom)
+    - Format B (momentum): .rolling(n).mean().shift(1)
+    - Format C (growth): np.where(shift==0, 0, (x-x.shift)/x.shift)
+    - Format D (rank): 任意format + .rank(pct=True)
     """
-    return 'np.where' in code
+    has_np_where = 'np.where' in code
+    has_rolling = '.rolling(' in code and '.shift(1)' in code
+    return has_np_where or has_rolling
 
 
 def _validate_two_line_format(code: str) -> bool:
-    """
-    验证是否为正确的两行格式
-    
-    正确格式：
-    data['factor_score'] = np.where(...)
-    data['factor_score'] = data['factor_score'].fillna(0)
-    """
     lines = code.strip().split('\n')
     
     if len(lines) != 2:
@@ -83,16 +80,25 @@ def _validate_two_line_format(code: str) -> bool:
     line1 = lines[0].strip()
     line2 = lines[1].strip()
     
-    # 第一行必须有 np.where
-    if 'np.where' not in line1:
+    # 第一行必须赋值给factor_score
+    if not line1.startswith("data['factor_score']"):
+        return False
+    
+    # 第一行必须有 np.where 或 rolling+shift
+    has_np_where = 'np.where' in line1
+    has_rolling = '.rolling(' in line1 and '.shift(1)' in line1
+    if not has_np_where and not has_rolling:
         return False
     
     # 第二行必须有 fillna
     if 'fillna' not in line2:
         return False
     
+    # 第二行必须赋值给factor_score
+    if not line2.startswith("data['factor_score']"):
+        return False
+    
     return True
-
 
 def _simple_validate(code: str) -> Optional[str]:
     """
@@ -107,7 +113,7 @@ def _simple_validate(code: str) -> Optional[str]:
         return None
     
     # 强制检查 np.where
-    if not _must_have_np_where(code):
+    if not _is_valid_format(code):
         return None
     
     # 检查两行格式
@@ -222,143 +228,163 @@ def _build_ultra_strict_prompt(
     round_id: int,
 ) -> str:
     """
-    超严格版 Prompt - 100% 强制 np.where，禁止 (denom + 1e-8)
+    扩展版 Prompt - 支持多种因子形式
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
         trn = rec.get("train_score", None)
         val = rec.get("val_score", None)
-        
         ts = "N/A" if trn is None else f"{float(trn):.4f}"
         vs = "N/A" if val is None else f"{float(val):.4f}"
-        
         return (
             f"#{i}  Train={ts}  Val={vs}\n"
             f"{code}\n"
         )
 
-    # 展示所有20个因子
     pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:20]))
 
-    # ========== 新增：负样本展示 ========== #
     neg_block = ""
     if negatives:
         def _fmt_neg(rec: Dict[str, Any], i: int) -> str:
-            """格式化负样本"""
             code = str(rec.get("code", ""))[:250]
             trn = rec.get("train_score", None)
             ts = "N/A" if trn is None else f"{float(trn):.4f}"
             return f"BAD #{i}  Train={ts}\n{code}\n"
-        
+
         neg_lines = "\n".join(_fmt_neg(r, i + 1) for i, r in enumerate(negatives))
-        
+
         neg_block = f"""
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ❌ FAILED FACTORS (AVOID THESE PATTERNS - LOW TRAIN SCORES)
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
+
     {neg_lines}
-    
-    These factors have LOW train scores and demonstrate common pitfalls:
-    - Missing denominator checks (division by zero)
-    - Poor normalization
-    - Noise amplification
-    - Weak economic intuition
-    
-    DO NOT copy these patterns. Learn what to AVOID.
+
+    These factors have LOW train scores. DO NOT copy these patterns.
     """
-    # ========================================= #
-    
-    return f"""You are generating factor formulas. Follow these examples EXACTLY:
-    
+
+    return f"""You are generating factor formulas for quantitative investing.
+
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    TOP PERFORMING FACTORS (COPY THEIR STRUCTURE)
+    TOP PERFORMING FACTORS (LEARN FROM THESE)
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
+
     {pos_block}
     {neg_block}
-    
+
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ⚠️  CRITICAL: MANDATORY STRUCTURE (NO EXCEPTIONS)  ⚠️
-    
-    EVERY factor MUST follow this EXACT 2-line structure:
-    
-    Line 1: data['factor_score'] = np.where(data['DENOM']==0, 0, EXPRESSION/data['DENOM'])
-    Line 2: data['factor_score'] = data['factor_score'].fillna(0)
-    
-    Where:
-    - DENOM = denominator field (revtq, saleq, atq, etc.)
-    - EXPRESSION = numerator (can be: single field, sum, difference, etc.)
-    
-    EXAMPLES OF VALID VARIATIONS:
-    
-    Example 1 (difference in numerator):
+    ✅  VALID FACTOR FORMATS (choose any of these)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    FORMAT A - Financial Ratio (np.where required):
+    data['factor_score'] = np.where(data['DENOM']==0, 0, NUMERATOR/data['DENOM'])
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    Example A1 (difference in numerator):
     data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])
     data['factor_score'] = data['factor_score'].fillna(0)
-    
-    Example 2 (sum in numerator):
+
+    Example A2 (sum in numerator):
     data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])
     data['factor_score'] = data['factor_score'].fillna(0)
-    
-    Example 3 (single field in numerator):
+
+    Example A3 (single field):
     data['factor_score'] = np.where(data['saleq']==0, 0, data['ibq']/data['saleq'])
     data['factor_score'] = data['factor_score'].fillna(0)
-    
+
+    FORMAT B - Momentum / Rolling Mean:
+    data['factor_score'] = data['FIELD'].rolling(N).mean().shift(1)
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    Example B1:
+    data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    Example B2 (difference of rolling means):
+    data['factor_score'] = (data['niq'].rolling(4).mean() - data['niq'].rolling(8).mean()).shift(1)
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    FORMAT C - Growth Rate (period-over-period change):
+    data['factor_score'] = np.where(data['FIELD'].shift(4)==0, 0, (data['FIELD']-data['FIELD'].shift(4))/data['FIELD'].shift(4))
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    Example C1:
+    data['factor_score'] = np.where(data['saleq'].shift(4)==0, 0, (data['saleq']-data['saleq'].shift(4))/data['saleq'].shift(4))
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    Example C2:
+    data['factor_score'] = np.where(data['atq'].shift(4)==0, 0, (data['atq']-data['atq'].shift(4))/data['atq'].shift(4))
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    FORMAT D - Volatility / Rolling Std:
+    data['factor_score'] = data['FIELD'].rolling(N).std().shift(1)
+    data['factor_score'] = data['factor_score'].fillna(0)
+
+    Example D1:
+    data['factor_score'] = data['niq'].rolling(4).std().shift(1)
+    data['factor_score'] = data['factor_score'].fillna(0)
+
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ❌ ABSOLUTELY FORBIDDEN (WILL BE REJECTED)
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    1. ONE-LINE formats like:
-       data['factor_score'] = (data['niq']-data['txpq']) / (data['revtq'] + 1e-8)
-       ❌ WRONG - missing np.where, missing second line
-    
+
+    1. ONE-LINE format (missing second line):
+       data['factor_score'] = data['niq'] / data['saleq']
+       ❌ WRONG - must be exactly 2 lines
+
     2. Using (denom + 1e-8) instead of np.where:
-       data['factor_score'] = EXPRESSION / (data['DENOM'] + 1e-8)
-       ❌ WRONG - must use np.where
-    
-    3. Any format without np.where:
+       data['factor_score'] = data['niq'] / (data['saleq'] + 1e-8)
+       ❌ WRONG
+
+    3. Rolling WITHOUT .shift(1) (lookahead bias):
+       data['factor_score'] = data['saleq'].rolling(4).mean()
+       ❌ WRONG - MUST add .shift(1) after rolling
+
+    4. Any format that is not exactly 2 lines:
        ❌ REJECTED IMMEDIATELY
-    
+
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     📋 YOUR TASK
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    Generate {n} factors using the MANDATORY 2-line np.where structure above.
-    
+
+    Generate {n} factors. MIX different formats for diversity.
+
     REQUIREMENTS:
-    
+
     1. **Structure** (100% compliance):
-       - Line 1: MUST start with "data['factor_score'] = np.where("
-       - Line 2: MUST be "data['factor_score'] = data['factor_score'].fillna(0)"
-       
-    2. **Fields**:
-       - Available: {_FIELDS_FOR_PROMPT}
-       - Use 2-3 fields per factor
-       - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
-       
-    3. **Variations** (change these, keep structure):
-       - Numerator: can be niq-txpq, ibq+cogsq, single field, etc.
-       - Denominator: revtq, saleq, atq, lctq, etc.
-       - Fields: use different combinations
-    
-    4. **Format** (CRITICAL):
-       - Use \\n to separate two lines in JSON
+       - Exactly 2 lines per factor
+       - Line 1: MUST start with "data['factor_score'] ="
+       - Line 2: MUST end with ".fillna(0)"
        - Use data['field'] format (NOT data.get)
-       - No markdown, no explanations, just JSON
-    
+
+    2. **Format diversity** (IMPORTANT - do NOT generate all ratio factors):
+       - Include at least {max(2, n//5)} FORMAT A factors (ratio)
+       - Include at least {max(2, n//5)} FORMAT B factors (momentum/rolling)
+       - Include at least {max(1, n//5)} FORMAT C factors (growth rate)
+       - Include at least {max(1, n//5)} FORMAT D factors (volatility)
+
+    3. **Fields**:
+       - Available: {_FIELDS_FOR_PROMPT}
+       - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
+       - Rolling window N: use 2, 3, 4, 6, or 8 (quarterly data)
+
+    4. **Output format** (CRITICAL):
+       - Use \\n to separate two lines inside JSON string
+       - Pure JSON, no markdown, no explanations
+
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ⚠️  OUTPUT FORMAT (JSON ONLY)  ⚠️
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
+
     [
       {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, (data['ibq']-data['txpq'])/data['saleq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-      {{"code": "data['factor_score'] = np.where(data['atq']==0, 0, (data['revtq']+data['niq'])/data['atq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-      {{"code": "data['factor_score'] = np.where(data['lctq']==0, 0, data['cheq']/data['lctq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
+      {{"code": "data['factor_score'] = data['niq'].rolling(4).mean().shift(1)\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+      {{"code": "data['factor_score'] = np.where(data['saleq'].shift(4)==0, 0, (data['saleq']-data['saleq'].shift(4))/data['saleq'].shift(4))\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
+      {{"code": "data['factor_score'] = data['niq'].rolling(4).std().shift(1)\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
     ]
-    
+
     Start output with '[' immediately. No explanations. Exactly {n} factors.
-    
-    REMEMBER: Every factor MUST have np.where. No exceptions. No (denom + 1e-8).""".strip()
+    Mix ALL four formats. Do NOT generate only ratio factors.""".strip()
 
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
@@ -476,7 +502,7 @@ class PositiveAgents:
                 continue
 
             rejected = {
-                "no_np_where": 0,
+                "invalid_format": 0,
                 "wrong_format": 0,
                 "lookahead": 0,
                 "duplicate": 0,
@@ -488,8 +514,8 @@ class PositiveAgents:
                 code_raw = it.get("code", "")
                 
                 # ========== 第一关：必须有 np.where ========== #
-                if not _must_have_np_where(code_raw):
-                    rejected["no_np_where"] += 1
+                if not _is_valid_format(code_raw):
+                    rejected["invalid_format"] += 1
                     continue
                 
                 # ========== 第二关：使用简化验证 ========== #
@@ -524,7 +550,7 @@ class PositiveAgents:
                 )
                 if any(rejected.values()):
                     self.logger.info(
-                        f"[positive] rejected: no_np_where={rejected['no_np_where']}, "
+                        f"[positive] rejected: invalid_format={rejected['invalid_format']}, "
                         f"wrong_format={rejected['wrong_format']}, "
                         f"lookahead={rejected['lookahead']}, "
                         f"dup={rejected['duplicate']}, sim={rejected['similarity']}"
@@ -535,7 +561,7 @@ class PositiveAgents:
                 if parsed:
                     self.logger.warning(
                         f"[positive] parsed {len(parsed)} but all rejected: "
-                        f"no_np_where={rejected['no_np_where']}, "
+                        f"invalid_format={rejected['invalid_format']}, "
                         f"wrong_format={rejected['wrong_format']}, "
                         f"lookahead={rejected['lookahead']}, "
                         f"dup={rejected['duplicate']}"
