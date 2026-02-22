@@ -18,9 +18,9 @@ from pathlib import Path
 # 迭代轮次
 MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
-FACTORS_PER_ROUND = 10            # 每轮生成因子数
-NEGATIVE_SAMPLES_COUNT = 3        # 每轮生成负样本数（Round 1 会被覆盖为 0）
-MAX_GENERATION_ATTEMPTS = 12      # 增加尝试次数（原 10 → 12）
+FACTORS_PER_ROUND = 20            # 每轮生成因子数
+NEGATIVE_SAMPLES_COUNT = 5        # 每轮生成负样本数（Round 1 会被覆盖为 0）
+MAX_GENERATION_ATTEMPTS = 15      # 增加尝试次数（原 10 → 15）
 
 # =============================================================================
 # 路径配置
