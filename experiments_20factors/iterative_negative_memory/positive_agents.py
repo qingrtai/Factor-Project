@@ -55,7 +55,7 @@ GPT_MAX_TOKENS = int(CONFIG.get("GPT_MAX_TOKENS", 2200))
 MAX_RETRIES = int(CONFIG.get("MAX_RETRIES", 6)) or 6
 
 BASE_MIN_SIM = float(POS_CFG.get("min_code_similarity", 0.70))
-BATCH_SIZE = int(POS_CFG.get("batch_size", 10))
+BATCH_SIZE = int(POS_CFG.get("batch_size", 20))
 
 
 def _must_have_np_where(code: str) -> bool:
@@ -237,8 +237,8 @@ def _build_ultra_strict_prompt(
             f"{code}\n"
         )
 
-    # 展示所有10个因子
-    pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives))
+    # 展示所有20个因子
+    pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:20]))
 
     # ========== 新增：负样本展示 ========== #
     neg_block = ""
