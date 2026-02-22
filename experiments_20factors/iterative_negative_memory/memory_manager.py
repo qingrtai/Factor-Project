@@ -31,11 +31,6 @@ logger = logging.getLogger(__name__)
 class MemoryManager:
     """
     记忆管理器（更保守的混合策略）
-    
-    关键改进：
-    - Round 1: 100% baseline （避免过早混合）
-    - Round 2: 80% baseline + 20% round 1
-    - Round 3+: 70% baseline + 30% previous
     """
 
     def __init__(self):
@@ -77,7 +72,7 @@ class MemoryManager:
             
             df = pd.read_csv(csv_path)
             df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
-            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(10)
+            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(20)
             
             positives = top10.to_dict(orient="records")
             
@@ -99,7 +94,7 @@ class MemoryManager:
         try:
             prev_df = pd.read_csv(prev_path)
             prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
-            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(10)
+            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(20)
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
         
