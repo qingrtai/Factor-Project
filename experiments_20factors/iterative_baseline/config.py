@@ -33,7 +33,8 @@ CONFIG = {
     "MIN_DELTA": MIN_DELTA,
     "MIN_ROUNDS": MIN_ROUNDS,
     "VAL_SCORE_THRESHOLD": VAL_SCORE_THRESHOLD,
-    "TOP_K_FACTORS": 10,  # ← 添加这一行
+    "TOP_K_FACTORS": 20,  # ← 添加这一行
+    "MAX_TOKENS": 1800,  # 20个因子需要更多token
 }
 
 # 校验函数
