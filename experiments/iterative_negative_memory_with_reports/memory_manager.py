@@ -98,9 +98,9 @@ class MemoryManager:
                 self.logger.warning(f"[memory] Baseline 缺少 factor_report 列，使用空字符串")
                 df["factor_report"] = ""
             
-            # 按 train_score 排序
-            df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
-            top10 = df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            # 按 val_score 排序
+            df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
+            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(10)
             
             positives = top10.to_dict(orient="records")
             
@@ -108,8 +108,8 @@ class MemoryManager:
                 f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本"
             )
             if len(top10) > 0:
-                train_range = f"[{top10['train_score'].min():.4f}, {top10['train_score'].max():.4f}]"
-                self.logger.info(f"  - Train score 范围: {train_range}")
+                val_range = f"[{top10['val_score'].min():.4f}, {top10['val_score'].max():.4f}]"
+                self.logger.info(f"  - Val score 范围: {val_range}")
             
             return positives
         
@@ -127,9 +127,9 @@ class MemoryManager:
                 self.logger.warning(f"[memory] Round {round_num-1} 缺少 factor_report 列，使用空字符串")
                 prev_df["factor_report"] = ""
             
-            # 按 train_score 排序
-            prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
-            top10 = prev_df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            # 按 val_score 排序
+            prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
+            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(10)
             
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
@@ -234,6 +234,8 @@ class MemoryManager:
             memory.append({
                 "code": r.get("code", ""),
                 "factor_report": r.get("factor_report", ""),  # ← 使用报告
+                "train_score": r.get("train_score", 0),      # ← 新增
+                "val_score": r.get("val_score", -999),       # ← 新增
                 "memory_type": "positive",
             })
         
@@ -242,6 +244,8 @@ class MemoryManager:
             memory.append({
                 "code": r.get("code", ""),
                 "factor_report": r.get("factor_report", ""),  # ← 使用报告
+                "train_score": r.get("train_score", 0),      # ← 新增
+                "val_score": r.get("val_score", -999),       # ← 新增
                 "memory_type": "negative",
             })
         
