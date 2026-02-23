@@ -127,6 +127,30 @@ class FactorIterator:
                 f"  - 记忆组成: {len(positives)} 正样本 + {len(negatives)} 负样本 "
                 f"= {len(combined_memory)} 总记忆"
             )
+            # ========== Step 3.5: 收集历史因子代码（跨轮去重）========== #
+            history_codes = set()
+            # 加载 baseline
+            from .config import BASELINE_FILE
+            if os.path.exists(BASELINE_FILE):
+                try:
+                    bl_df = pd.read_csv(BASELINE_FILE)
+                    for c in bl_df["code"].dropna():
+                        history_codes.add(c.replace(" ", "").replace("\n", "").lower())
+                except Exception:
+                    pass
+            # 加载之前各轮
+            from .config import RESULTS_DIR
+            for prev_r in range(1, round_num):
+                prev_path = os.path.join(RESULTS_DIR, f"round_{prev_r}_factor_metrics.csv")
+                if os.path.exists(prev_path):
+                    try:
+                        prev_df = pd.read_csv(prev_path)
+                        for c in prev_df["code"].dropna():
+                            history_codes.add(c.replace(" ", "").replace("\n", "").lower())
+                    except Exception:
+                        pass
+            
+            self.logger.info(f"  - 历史因子去重池: {len(history_codes)} 个")
             
             # ========== Step 4: 生成新因子（带重试）========== #
             self.logger.info(f"[Round {round_num}] Step 4: 生成新因子（目标 {self.factors_per_round}）")
@@ -134,7 +158,8 @@ class FactorIterator:
             new_factors = self._generate_with_retry(
                 round_num=round_num,
                 memory_records=combined_memory,
-                target_n=self.factors_per_round
+                target_n=self.factors_per_round,
+                history_codes=history_codes  # ← 新增参数
             )
             
             if not new_factors:
@@ -199,11 +224,12 @@ class FactorIterator:
         self,
         round_num: int,
         memory_records: List[Dict[str, Any]],
-        target_n: int
+        target_n: int,
+        history_codes: set = None  # ← 新增参数
     ) -> List[Dict[str, Any]]:
         """带重试的因子生成"""
         collected = []
-        seen_codes = set()
+        seen_codes = set(history_codes) if history_codes else set()  # ← 用历史代码初始化
         
         for attempt in range(1, self.max_attempts + 1):
             need = target_n - len(collected)
@@ -293,7 +319,7 @@ class FactorIterator:
             )
             
             # 过拟合过滤
-            MAX_RATIO = 12.0
+            MAX_RATIO = 20.0
             if df is not None and not df.empty:
                 if 'val_score' in df.columns and 'train_score' in df.columns:
                     val = pd.to_numeric(df['val_score'], errors='coerce').abs()
