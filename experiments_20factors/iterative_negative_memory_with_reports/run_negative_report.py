@@ -19,13 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # 导入本实验模块
-from experiments.iterative_negative_memory_with_reports.config import (
+from experiments_20factors.iterative_negative_memory_with_reports.config import (
     CONFIG,
     MAX_ROUNDS,
     validate_config,
     print_config_summary,
 )
-from experiments.iterative_negative_memory_with_reports.iterator import FactorIterator
+from experiments_20factors.iterative_negative_memory_with_reports.iterator import FactorIterator
 
 # 导入通用模块
 from core.utils import setup_logger
