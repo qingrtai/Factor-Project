@@ -74,13 +74,13 @@ class MemoryManager:
             df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
             top10 = df.sort_values("val_score", ascending=False, na_position="last").head(20)
 
-            # 新增：过滤负收益因子
-            top10 = top10[top10["val_score"] > 0]
+            # 同时要求 val_score > 0 AND train_score > 0
+            df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
+            top10 = top10[(top10["val_score"] > 0) & (top10["train_score"] > 0)]
             if len(top10) == 0:
                 top10 = df.sort_values("val_score", ascending=False, na_position="last").head(5)
-            
             positives = top10.to_dict(orient="records")
-            
+                        
             self.logger.info(
                 f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本"
             )
@@ -100,8 +100,9 @@ class MemoryManager:
             prev_df = pd.read_csv(prev_path)
             prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
             top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(20)
-            # 新增：过滤负收益因子
-            top10 = top10[top10["val_score"] > 0]
+            # 同时要求 val_score > 0 AND train_score > 0
+            prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
+            top10 = top10[(top10["val_score"] > 0) & (top10["train_score"] > 0)]
             if len(top10) == 0:
                 top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(5)
         except Exception as e:
