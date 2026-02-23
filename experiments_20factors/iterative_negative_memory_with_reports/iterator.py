@@ -202,16 +202,16 @@ class FactorIterator:
             
             return stats
             
-        except Exception as e:
-            self.logger.error(f"[Round {round_num}] 执行失败: {e}")
-            return {
-                "round_num": round_num,
-                "status": "failed",
-                "error": str(e),
-                "duration": time.time() - round_start,
-                "factors_generated": 0,
-                "factors_evaluated": 0,
-            }
+            except Exception as e:
+                self.logger.error(f"[Round {round_num}] 执行失败: {e}")
+                return {
+                    "round_num": round_num,
+                    "status": "failed",
+                    "error": str(e),
+                    "duration": time.time() - round_start,
+                    "factors_generated": 0,
+                    "factors_evaluated": 0,
+                }
     
     # ========== 辅助方法 ========== #
     
