@@ -100,7 +100,7 @@ class MemoryManager:
             
             # 按 train_score 排序
             df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
-            top10 = df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            top10 = df.sort_values("train_score", ascending=False, na_position="last").head(5)
             
             positives = top10.to_dict(orient="records")
             
@@ -129,7 +129,7 @@ class MemoryManager:
             
             # 按 train_score 排序
             prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
-            top10 = prev_df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            top10 = prev_df.sort_values("train_score", ascending=False, na_position="last").head(5)
             
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
