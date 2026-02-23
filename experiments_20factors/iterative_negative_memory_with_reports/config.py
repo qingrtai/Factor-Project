@@ -151,7 +151,7 @@ CONFIG = {
     "MIN_DELTA": MIN_DELTA,
     "VAL_SCORE_THRESHOLD": VAL_SCORE_THRESHOLD,
 
-     "FACTOR_GENERATION_MAX_TOKENS": 1800,  # ← 新增
+     "FACTOR_GENERATION_MAX_TOKENS": FACTOR_GENERATION_MAX_TOKENS,  # ← 新增
 }
 
 # =============================================================================
