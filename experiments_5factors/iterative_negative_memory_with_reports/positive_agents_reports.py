@@ -369,7 +369,7 @@ class PositiveAgents:  # ← 类名改为复数
         bottom_factors = positives[-bottom_k:] if len(positives) > bottom_k else []
         
         # 负样本单独处理（作为反面教材）
-        negative_factors = negatives[:3] if negatives else []
+        negative_factors = negatives[:2] if negatives else []
 
         prev_pairs = prev_pairs_with_score
 
