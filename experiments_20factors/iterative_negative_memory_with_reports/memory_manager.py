@@ -78,7 +78,7 @@ class MemoryManager:
     
     def get_memory_for_round(self, round_num: int) -> List[Dict]:
         """
-        返回上一轮的 Top10 因子（FIXED: 简化策略）
+        返回上一轮的 Top20 因子（FIXED: 简化策略）
         
         策略：
         - Round 1: 100% baseline (Top 10)
@@ -98,9 +98,9 @@ class MemoryManager:
                 self.logger.warning(f"[memory] Baseline 缺少 factor_report 列，使用空字符串")
                 df["factor_report"] = ""
             
-            # 按 train_score 排序
-            df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
-            top10 = df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            # 按 val_score 排序
+            df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
+            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(20)
             
             positives = top10.to_dict(orient="records")
             
@@ -127,9 +127,9 @@ class MemoryManager:
                 self.logger.warning(f"[memory] Round {round_num-1} 缺少 factor_report 列，使用空字符串")
                 prev_df["factor_report"] = ""
             
-            # 按 train_score 排序
-            prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
-            top10 = prev_df.sort_values("train_score", ascending=False, na_position="last").head(10)
+            # 按 val_score 排序
+            prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
+            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(20)
             
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
@@ -153,7 +153,7 @@ class MemoryManager:
     def get_worst_factors_with_reports(
         self,
         round_num: int,
-        n: int = 3,  # ← FIXED: default 改为 3
+        n: int = 5,  # ← FIXED: default 改为 3
         positives_for_context: Optional[List[Dict]] = None,
     ) -> List[Dict]:
         """
