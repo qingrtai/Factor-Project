@@ -357,12 +357,11 @@ def _build_ultra_strict_prompt(
        - Line 2: MUST end with ".fillna(0)"
        - Use data['field'] format (NOT data.get)
 
-    2. **Format diversity** (IMPORTANT - do NOT generate all ratio factors):
-       - Include at least {max(2, n//5)} FORMAT A factors (ratio)
-       - Include at least {max(2, n//5)} FORMAT B factors (momentum/rolling)
-       - Include at least {max(1, n//5)} FORMAT C factors (growth rate)
-       - Include at least {max(1, n//5)} FORMAT D factors (volatility)
-
+    2. **Format**: Use ANY of the four formats above.
+       Focus on formats that achieve HIGH train scores based on the examples.
+       You may generate mostly ratio factors (FORMAT A) if they perform best.
+       Other formats are optional - only include if you believe they will score well.
+       
     3. **Fields**:
        - Available: {_FIELDS_FOR_PROMPT}
        - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
@@ -384,7 +383,7 @@ def _build_ultra_strict_prompt(
     ]
 
     Start output with '[' immediately. No explanations. Exactly {n} factors.
-    Mix ALL four formats. Do NOT generate only ratio factors.""".strip()
+    Focus on high-scoring patterns from the examples above.""".strip()
 
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
