@@ -24,8 +24,8 @@ from core.factor_score import aggregate_score
 
 # 与 factor_evaluator.py 对齐的参数
 FACTOR_CLIP_Q = (0.005, 0.995)
-MIN_DD_OBS = 3  # ← IMPROVED: 从 5 降到 3
-MIN_NEG_OBS = 1  # ← IMPROVED: 从 2 降到 1
+MIN_DD_OBS = 12  # ← IMPROVED: 从 5 降到 3
+MIN_NEG_OBS = 3  # ← IMPROVED: 从 2 降到 1
 NEUTRAL_MDD = 0.5
 NEUTRAL_D = 0.5
 LS_WINSOR_Q = (0.01, 0.99)
