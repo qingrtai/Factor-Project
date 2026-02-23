@@ -1,4 +1,4 @@
-# experiments/iterative_negative_memory_with_reports/positive_agents_reports.py
+# experiments/iterative_negative_memory_with_reports_v2/positive_agents_reports.py
 """
 正向因子生成代理（带报告版本）
 
@@ -109,209 +109,72 @@ class PositiveAgents:  # ← 类名改为复数
         
         # 生成参数
         self.refill_max_attempts = 3
-    def generate_optimized_factors(
-            self,
-            previous_factors: List[Dict],  # ← [{'code': '...', 'report': '...'}, ...]
-            round_num: int,
-            save_response: bool = True,
-            n_override: Optional[int] = None,
-            existing_codes: Optional[List[str]] = None
-        ) -> List[str]:
-            """
-            基于上一轮的因子分析生成新因子
+        self.batch_size = 5
+
+    # ================= 对外接口（iterator 调用）=================
+    def generate_factors(
+        self,
+        current_round: int,
+        target_n: int,
+        id_prefix: str,
+        memory_records: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        生成因子（适配 iterator 调用）
+        
+        Args:
+            current_round: 当前轮次
+            target_n: 目标生成数量
+            id_prefix: 因子 ID 前缀（如 "r2_"）
+            memory_records: 记忆列表
+                格式: [{"code": "...", "factor_report": "...", "memory_type": "positive"}, ...]
+        
+        Returns:
+            [{"factor_id": "r2_01", "code": "..."}, ...]
+        """
+        self.logger.info(
+            f"[positive] Round {current_round}: 生成 {target_n} 个因子 "
+            f"(记忆数: {len(memory_records)})"
+        )
+        
+        # ========== Step 1: 转换格式 ========== #
+        previous_factors = []
+        
+        for rec in memory_records:
+            code = str(rec.get('code', '')).strip()
+            if not code:
+                continue
             
-            Args:
-                previous_factors: 上一轮因子列表
-                    格式: [{'code': '...', 'report': '...'}, ...]
-                round_num: 当前轮次
-                save_response: 是否保存 GPT 响应
-                n_override: 覆盖默认的因子数量
-                existing_codes: 已存在的代码（用于去重）
+            previous_factors.append({
+                'code': code,
+                'report': rec.get('factor_report', ''),
+                'train_score': rec.get('train_score', 0),
+                'val_score': rec.get('val_score', -999),      # ← 新增
+                'memory_type': rec.get('memory_type', 'positive')
+            })
+        
+        self.logger.info(f"[positive]   - 有效记忆: {len(previous_factors)}")
+        
+        # ========== Step 2: 调用内部生成逻辑 ========== #
+        codes = self.generate_optimized_factors(
+            previous_factors=previous_factors,
+            round_num=current_round,
+            n_override=target_n,
+            save_response=True,
+            existing_codes=None  # ← 改回 None
+        )
             
-            Returns:
-                生成的因子代码列表
-            """
-            target_n = int(n_override) if (n_override and n_override > 0) else self.factors_per_round
-
-
-            # 在上面代码块后面添加以下代码：
-            # ========== 新增：对因子进行排序和分组 ========== #
-            # 尝试从 previous_factors 中获取 train_score 用于排序
-            prev_pairs_with_score = []
-            for f in previous_factors or []:
-                code = str(f.get('code', '')).strip()
-                if not code:
-                    continue
-                report = str(f.get('report', '')).strip()
-                train_score = f.get('train_score', -999)  # 用于排序
-                prev_pairs_with_score.append({
-                    'code': code, 
-                    'report': report, 
-                    'train_score': train_score
-                })
-
-            # 按 train_score 排序
-            prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
-
-            # 分离 top 和 bottom 和middle
-            top_k = min(4, len(prev_pairs_with_score))
-            bottom_k = min(3, len(prev_pairs_with_score))
-            middle_k = 3
-            
-            top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
-            bottom_factors = prev_pairs_with_score[-bottom_k:] if len(prev_pairs_with_score) > bottom_k else []
-            
-            mid_start = top_k
-            mid_end = max(mid_start, len(prev_pairs_with_score) - bottom_k)
-            middle_pool = prev_pairs_with_score[mid_start:mid_end]
-            if len(middle_pool) >= middle_k:
-                step = max(1, len(middle_pool) // middle_k)
-                middle_factors = [middle_pool[i * step] for i in range(middle_k)]
-            else:
-                middle_factors = middle_pool
-
-            # 更新原来的 prev_pairs（保持兼容性）
-            prev_pairs = prev_pairs_with_score
-
-            if not prev_pairs:
-                self.logger.warning("上一轮有效记忆为空（需要包含 code+report）。将以零上下文请求 GPT。")
-
-            # ========= 分批首呼：显著降低长 JSON 被截断的概率 ========= #
-            codes: List[str] = []
-            need = target_n
-            batch = max(1, min(self.batch_size, need))
-            batch_idx = 0
-            while need > 0:
-                batch_idx += 1
-                # 传入分组信息
-                prompt = self._build_prompt(
-                    prev_pairs, 
-                    batch,
-                    top_factors=top_factors,      # 传入 top 因子
-                    bottom_factors=bottom_factors,  # 传入 bottom 因子
-                    middle_factors=middle_factors  # ← 加这行
-                )
-                self.logger.info(f"Round {round_num}: 调用 GPT 生成 {batch} 个新因子")
-                resp = call_gpt(prompt, temperature=self.temperature, max_tokens=self.max_tokens)
-                if not isinstance(resp, str):
-                    resp = str(resp or '')
-                if save_response:
-                    self._save_gpt_response(round_num, prompt, resp, suffix=f"_batch_{batch_idx}_{batch}")
-                self.logger.info(f"Round {round_num}: GPT首呼返回前200字：{resp[:200].replace(os.linesep,' ')}")
-
-                got = self._parse_and_transform(resp, batch)
-
-                # 去重并并入
-                seen = set(self._norm_key(c) for c in codes)
-                for c in got:
-                    k = self._norm_key(c)
-                    if k not in seen and len(codes) < target_n:
-                        codes.append(c)
-                        seen.add(k)
-
-                need = target_n - len(codes)
-                batch = max(1, min(self.batch_size, need))
-
-            # 去重：排除已尝试/已评估
-            if existing_codes:
-                exist_keys = set(self._norm_key(c) for c in existing_codes if isinstance(c, str))
-                codes = [c for c in codes if self._norm_key(c) not in exist_keys]
-
-            # 补货（仍然保留，以防极端情况下首呼/分批仍有损耗）
-            attempts = 0
-            consecutive_no_progress = 0
-            last_count = 0
-            while len(codes) < target_n and attempts < self.refill_max_attempts:
-                attempts += 1
-                last_count = len(codes)
-                missing = target_n - len(codes)
-                self.logger.info(f"Round {round_num}: 解析不足 {len(codes)}/{target_n}，补货 {missing}（attempt {attempts}/{self.refill_max_attempts}）")
-
-                reasons = self._last_reject_reasons if hasattr(self, "_last_reject_reasons") else []
-                refill_prompt = self._build_refill_prompt(
-                    missing, 
-                    reasons,
-                    existing_codes=codes
-                )
-                resp2 = call_gpt(refill_prompt, temperature=min(self.temperature + 0.08, 0.5),
-                                max_tokens=max(600, self.max_tokens))
-                if not isinstance(resp2, str):
-                    resp2 = str(resp2 or '')
-                if save_response:
-                    self._save_gpt_response(round_num, refill_prompt, resp2, suffix=f"_refill_{attempts}")
-                self.logger.info(f"Round {round_num}: 补货返回前200字：{resp2[:200].replace(os.linesep,' ')}")
-                more = self._parse_and_transform(resp2, missing)
-                
-                if existing_codes:
-                    exist_keys = set(self._norm_key(c) for c in existing_codes if isinstance(c, str))
-                    more = [c for c in more if self._norm_key(c) not in exist_keys]
-
-                seen = set(self._norm_key(c) for c in codes)
-                for c in more:
-                    k = self._norm_key(c)
-                    if k not in seen and len(codes) < target_n:
-                        codes.append(c)
-                        seen.add(k)
-
-                if len(codes) == last_count:
-                    consecutive_no_progress += 1
-                    if consecutive_no_progress >= 2:
-                        self.logger.warning(f"连续 {consecutive_no_progress} 次补货无效（生成的都是重复因子），停止补货")
-                        break
-                else:
-                    consecutive_no_progress = 0
-
-            return codes
-            self,
-            current_round: int,
-            target_n: int,
-            id_prefix: str,
-            memory_records: List[Dict[str, Any]]
-        ) -> List[Dict[str, Any]]:
-            self.logger.info(
-                f"[positive] Round {current_round}: 生成 {target_n} 个因子 "
-                f"(记忆数: {len(memory_records)})"
-            )
-            
-            # ========== Step 1: 转换格式 ========== #
-            previous_factors = []
-            existing_codes = []  # ← 新增：收集所有历史代码用于去重
-            
-            for rec in memory_records:
-                code = str(rec.get('code', '')).strip()
-                if not code:
-                    continue
-                
-                existing_codes.append(code)  # ← 记录已有代码
-                previous_factors.append({
-                    'code': code,
-                    'report': rec.get('factor_report', ''),
-                    'train_score': rec.get('train_score', 0),
-                    'memory_type': rec.get('memory_type', 'positive')
-                })
-            
-            self.logger.info(f"[positive]   - 有效记忆: {len(previous_factors)}, 已有代码: {len(existing_codes)}")
-            
-            # ========== Step 2: 调用内部生成逻辑 ========== #
-            codes = self.generate_optimized_factors(
-                previous_factors=previous_factors,
-                round_num=current_round,
-                n_override=target_n,
-                save_response=True,
-                existing_codes=existing_codes  # ← 从 None 改为 existing_codes
-            )
-            
-            # ========== Step 3: 转换返回格式 ========== #
-            results = []
-            for i, code in enumerate(codes, 1):
-                results.append({
-                    "factor_id": f"{id_prefix}{i:02d}",
-                    "code": code
-                })
-            
-            self.logger.info(f"[positive]   - 最终生成: {len(results)}/{target_n}")
-            
-            return results
+        # ========== Step 3: 转换返回格式 ========== #
+        results = []
+        for i, code in enumerate(codes, 1):
+            results.append({
+                "factor_id": f"{id_prefix}{i:02d}",
+                "code": code
+            })
+        
+        self.logger.info(f"[positive]   - 最终生成: {len(results)}/{target_n}")
+        
+        return results
 
     # ================= 内部核心逻辑 =================
     def generate_optimized_factors(
@@ -352,24 +215,33 @@ class PositiveAgents:  # ← 类名改为复数
                 'code': code, 
                 'report': report, 
                 'train_score': train_score,
+                'val_score': f.get('val_score', -999),        # ← 新增
                 'memory_type': memory_type
             })
 
         # 按 train_score 排序（降序）
-        prev_pairs_with_score.sort(key=lambda x: x.get('train_score', -999), reverse=True)
+        prev_pairs_with_score.sort(key=lambda x: x.get('val_score', -999), reverse=True)
 
         # 分离 Top 和 Bottom（只从正样本中选）
         positives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'positive']
         negatives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'negative']
-        
-        top_k = min(3, len(positives))
+
+        # v1: top-10, middle-3, bottom-0, negative-5
+        top_k = min(10, len(positives))
+        middle_k = 10
         bottom_k = 0
         
         top_factors = positives[:top_k] if positives else []
-        bottom_factors = positives[-bottom_k:] if len(positives) > bottom_k else []
+        
+        # middle: 从 top_k 之后取 middle_k 个
+        middle_start = top_k
+        middle_end = min(top_k + middle_k, len(positives))
+        middle_factors = positives[middle_start:middle_end] if len(positives) > middle_start else []
+        
+        bottom_factors = []  # bottom_k=0，不展示
         
         # 负样本单独处理（作为反面教材）
-        negative_factors = negatives[:3] if negatives else []
+        negative_factors = negatives[:5] if negatives else []
 
         prev_pairs = prev_pairs_with_score
 
@@ -390,6 +262,7 @@ class PositiveAgents:  # ← 类名改为复数
                 prev_pairs=prev_pairs,
                 target_n=batch,
                 top_factors=top_factors,
+                middle_factors=middle_factors,  # ← 新增
                 bottom_factors=bottom_factors,
                 negative_factors=negative_factors  # ← 传入负样本
             )
@@ -493,6 +366,7 @@ class PositiveAgents:  # ← 类名改为复数
         prev_pairs: List[Dict],
         target_n: int,
         top_factors: Optional[List[Dict]] = None,
+        middle_factors: Optional[List[Dict]] = None,  # ← 新增
         bottom_factors: Optional[List[Dict]] = None,
         negative_factors: Optional[List[Dict]] = None  # ← 新增负样本
     ) -> str:
@@ -540,6 +414,23 @@ class PositiveAgents:  # ← 类名改为复数
                 history_block += f"```python\n{code}\n```\n"
                 if strengths:
                     history_block += f"✓ Strengths: {strengths}\n"
+                history_block += "\n"
+
+        # ========== Middle 因子（参考对象）========== #
+        use_middle = middle_factors if middle_factors else []
+        if use_middle:
+            history_block += "=== MIDDLE-PERFORMING FACTORS (Reference - room for improvement) ===\n\n"
+            for i, p in enumerate(use_middle, 1):
+                code = p.get('code', '').strip()[:250]
+                report = p.get('report', '').strip()
+                score = p.get('train_score', 'N/A')
+                
+                history_block += f"Mid #{i} (Train Score: {score:.4f}):\n" if isinstance(score, (int, float)) else f"Mid #{i}:\n"
+                history_block += f"```python\n{code}\n```\n"
+                if report:
+                    # 简短摘要
+                    summary = report[:150].strip()
+                    history_block += f"→ Analysis: {summary}...\n"
                 history_block += "\n"
 
         # ========== Bottom 因子（避免错误）========== #
