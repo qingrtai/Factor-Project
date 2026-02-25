@@ -19,6 +19,11 @@ GENERATE_REPORTS_FOR = "ranked"  # 改为 "ranked"：top 3 详细报告 + bottom
 FACTOR_GENERATION_MAX_TOKENS = 1200  # 增加到 1200（原来 900）
 GENERATION_TEMPERATURE = 0.8  # 新增：生成因子时的温度
 
+# === 因子分配方案（新增）===
+# "A" = 有 middle（全部带报告）: top 35% + middle 30% + bottom 35%
+# "C" = 无 middle（丢弃中间 30%）: top 35% + bottom 35%
+ALLOCATION_SCHEME = "A"
+
 # === 报告策略（新增）===
 TOP_K_DETAILED = 3  # 前 K 个生成详细报告
 BOTTOM_K_BRIEF = 3  # 后 K 个生成简要报告（作为负例）
@@ -58,6 +63,8 @@ CONFIG = {
     # 生成配置
     "FACTOR_GENERATION_MAX_TOKENS": FACTOR_GENERATION_MAX_TOKENS,
     "GENERATION_TEMPERATURE": GENERATION_TEMPERATURE,
+    # 因子分配方案
+    "ALLOCATION_SCHEME": ALLOCATION_SCHEME,
     # 记忆配置
     "MEMORY_SCORE_FIELD": MEMORY_SCORE_FIELD,
     "GPT_MEMORY_FIELD": GPT_MEMORY_FIELD,
@@ -83,6 +90,8 @@ def validate_config():
         errors.append("FACTORS_PER_ROUND必须大于0")
     if not REPORT_TEMPLATE_FILE.exists():
         errors.append(f"报告模板文件不存在: {REPORT_TEMPLATE_FILE}")
+    if ALLOCATION_SCHEME not in ("A", "C"):
+        errors.append(f"ALLOCATION_SCHEME 必须是 'A' 或 'C'，当前: {ALLOCATION_SCHEME}")
     
     return errors, warnings
 
@@ -97,6 +106,13 @@ def print_config_summary():
     print(f"Baseline: {BASELINE_FILE}")
     print(f"结果目录: {RESULTS_DIR}")
     print(f"日志目录: {LOGS_DIR}")
+    
+    print("\n[因子分配方案]")
+    print(f"  方案: {ALLOCATION_SCHEME}")
+    if ALLOCATION_SCHEME == "A":
+        print(f"  Top 35% (strengths报告) + Middle 30% (neutral报告) + Bottom 35% (weaknesses报告)")
+    else:
+        print(f"  Top 35% (strengths报告) + Bottom 35% (weaknesses报告), 丢弃中间30%")
     
     print("\n[报告生成配置]")
     print(f"  模板文件: {REPORT_TEMPLATE_FILE}")
