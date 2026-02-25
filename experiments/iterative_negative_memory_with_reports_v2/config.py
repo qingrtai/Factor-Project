@@ -3,7 +3,9 @@
 iterative_negative_memory_with_reports_v2 实验配置
 核心特点：在负向记忆基础上，使用 factor_report 代替 train_score
 
-FIXED: NEGATIVE_SAMPLES_COUNT = 3 (was 5)
+改动：
+- 删除 NEGATIVE_SAMPLES_COUNT（改为由 allocate_factors() 动态计算）
+- 新增 ALLOCATION_SCHEME（"A" 或 "C"）
 """
 
 from shared.paths import results_dir
@@ -17,9 +19,14 @@ from pathlib import Path
 MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
 FACTORS_PER_ROUND = 10            # 每轮生成因子数
-NEGATIVE_SAMPLES_COUNT = 3        # ← FIXED: 改为3（was 5）
 MAX_GENERATION_ATTEMPTS = 8       # 每轮最大生成尝试次数
-FACTOR_GENERATION_MAX_TOKENS = 1800  # ← 新增
+FACTOR_GENERATION_MAX_TOKENS = 1800
+
+# === 因子分配方案 ===
+# "A" = 有 middle（全部带报告）: top 35% + middle 30% + negative 35%
+# "C" = 无 middle（丢弃中间 30%）: top 35% + negative 35%
+# negative 数量与 baseline 实验的 bottom 数量一致，确保对照干净
+ALLOCATION_SCHEME = "A"
 
 # =============================================================================
 # 路径配置
@@ -127,8 +134,10 @@ CONFIG = {
     "MAX_ROUNDS": MAX_ROUNDS,
     "MIN_ROUNDS": MIN_ROUNDS,
     "FACTORS_PER_ROUND": FACTORS_PER_ROUND,
-    "NEGATIVE_SAMPLES_COUNT": NEGATIVE_SAMPLES_COUNT,
     "MAX_GENERATION_ATTEMPTS": MAX_GENERATION_ATTEMPTS,
+    
+    # 因子分配方案
+    "ALLOCATION_SCHEME": ALLOCATION_SCHEME,
     
     # 路径
     "RESULTS_DIR": RESULTS_DIR,
@@ -150,7 +159,7 @@ CONFIG = {
     "MIN_DELTA": MIN_DELTA,
     "VAL_SCORE_THRESHOLD": VAL_SCORE_THRESHOLD,
 
-    "FACTOR_GENERATION_MAX_TOKENS": FACTOR_GENERATION_MAX_TOKENS,  # ← 新增
+    "FACTOR_GENERATION_MAX_TOKENS": FACTOR_GENERATION_MAX_TOKENS,
 }
 
 # =============================================================================
@@ -169,11 +178,8 @@ def validate_config():
         errors.append("MAX_ROUNDS必须大于0")
     if FACTORS_PER_ROUND <= 0:
         errors.append("FACTORS_PER_ROUND必须大于0")
-    if NEGATIVE_SAMPLES_COUNT < 0:
-        errors.append("NEGATIVE_SAMPLES_COUNT不能为负")
-    
-    if NEGATIVE_SAMPLES_COUNT == 0:
-        warnings.append("NEGATIVE_SAMPLES_COUNT为0，将退化为baseline")
+    if ALLOCATION_SCHEME not in ("A", "C"):
+        errors.append(f"ALLOCATION_SCHEME 必须是 'A' 或 'C'，当前: {ALLOCATION_SCHEME}")
     
     # 检查报告模板
     if not REPORT_CONFIG["template_file"].exists():
@@ -188,8 +194,12 @@ def print_config_summary():
     print("=" * 60)
     print(f"轮数: {MAX_ROUNDS}")
     print(f"每轮因子数: {FACTORS_PER_ROUND}")
-    print(f"负样本数: {NEGATIVE_SAMPLES_COUNT}")
-    print(f"记忆字段: {MEMORY_FIELDS}")  # ← 显示使用 report
+    print(f"分配方案: Scheme {ALLOCATION_SCHEME}")
+    if ALLOCATION_SCHEME == "A":
+        print(f"  Top 35% (strengths) + Middle 30% (neutral) + Negative 35% (weaknesses)")
+    else:
+        print(f"  Top 35% (strengths) + Negative 35% (weaknesses), 丢弃中间 30%")
+    print(f"记忆字段: {MEMORY_FIELDS}")
     print(f"Baseline: {BASELINE_FILE}")
     print(f"结果目录: {RESULTS_DIR}")
     print("=" * 60)
