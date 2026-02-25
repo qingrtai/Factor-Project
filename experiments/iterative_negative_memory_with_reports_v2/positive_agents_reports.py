@@ -19,6 +19,7 @@ import re
 import logging
 import os
 import sys
+import math
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
@@ -67,6 +68,42 @@ def _ensure_dir(p: Path) -> None:
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
+# ==================== 统一因子分配函数 ==================== #
+def allocate_factors(N: int, scheme: str = "A") -> Tuple[int, int, int]:
+    """
+    统一因子分配（不区分因子数量，固定比例）
+    
+    Scheme A: top 35% + middle 30% + bottom 35%（全部带报告）
+    Scheme C: top 35% + bottom 35%（丢弃中间 30%，无 middle）
+    
+    两种方案的 top 和 bottom 选取完全一致，便于消融实验对比。
+    
+    Args:
+        N: 总因子数量
+        scheme: "A" 或 "C"
+    
+    Returns:
+        (top_k, middle_k, bottom_k)
+    """
+    top_k = round(N * 0.35)
+    bottom_k = round(N * 0.35)
+    
+    # 确保 top_k 和 bottom_k 至少为 1（N 极小时）
+    top_k = max(1, top_k)
+    bottom_k = max(1, bottom_k)
+    
+    # 防止 top + bottom 超过 N
+    if top_k + bottom_k > N:
+        top_k = math.ceil(N / 2)
+        bottom_k = N - top_k
+    
+    if scheme.upper() == "C":
+        middle_k = 0  # 丢弃中间 30%
+    else:  # Scheme A
+        middle_k = N - top_k - bottom_k
+    
+    return top_k, middle_k, bottom_k
+
 
 # ========================================================================
 # 主类：PositiveAgents（注意复数）
@@ -110,6 +147,8 @@ class PositiveAgents:  # ← 类名改为复数
         # 生成参数
         self.refill_max_attempts = 3
         self.batch_size = 5
+
+        self.allocation_scheme = str(_cfg_get('ALLOCATION_SCHEME', 'A')).upper()
 
     # ================= 对外接口（iterator 调用）=================
     def generate_factors(
@@ -227,9 +266,9 @@ class PositiveAgents:  # ← 类名改为复数
         negatives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'negative']
 
         # v2: top-4, middle-3, bottom-0, negative-3
-        top_k = min(4, len(positives))
-        middle_k = 3
-        bottom_k = 0
+        N_pos = len(positives)
+        top_k, middle_k, _ = allocate_factors(N_pos, self.allocation_scheme)
+        bottom_k = 0  # negative 实验不用 bottom，负样本由外部传入
         
         top_factors = positives[:top_k] if positives else []
         
@@ -241,7 +280,7 @@ class PositiveAgents:  # ← 类名改为复数
         bottom_factors = []  # bottom_k=0，不展示
         
         # 负样本单独处理（作为反面教材）
-        negative_factors = negatives[:3] if negatives else []
+        negative_factors = negatives  # 数量已由 iterator 控制，不再硬编码
 
         prev_pairs = prev_pairs_with_score
 
@@ -429,8 +468,7 @@ class PositiveAgents:  # ← 类名改为复数
                 history_block += f"```python\n{code}\n```\n"
                 if report:
                     # 简短摘要
-                    summary = report[:150].strip()
-                    history_block += f"→ Analysis: {summary}...\n"
+                    history_block += f"Analysis:\n{report[:400]}\n"
                 history_block += "\n"
 
         # ========== Bottom 因子（避免错误）========== #
