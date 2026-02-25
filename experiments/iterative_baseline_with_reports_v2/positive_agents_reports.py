@@ -6,9 +6,11 @@
 2. 输入改为 code + report（而非 code + train_score）
 3. Prompt 构建：自然语言展示历史因子分析
 4. 保持健壮的去重、安全校验、补货逻辑
+5. 统一因子分配方案（Scheme A / C），不区分因子数量
 """
 
 import json
+import math
 import re
 import logging
 import os
@@ -61,6 +63,43 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
+# ==================== 统一因子分配函数 ==================== #
+def allocate_factors(N: int, scheme: str = "A") -> Tuple[int, int, int]:
+    """
+    统一因子分配（不区分因子数量，固定比例）
+    
+    Scheme A: top 35% + middle 30% + bottom 35%（全部带报告）
+    Scheme C: top 35% + bottom 35%（丢弃中间 30%，无 middle）
+    
+    两种方案的 top 和 bottom 选取完全一致，便于消融实验对比。
+    
+    Args:
+        N: 总因子数量
+        scheme: "A" 或 "C"
+    
+    Returns:
+        (top_k, middle_k, bottom_k)
+    """
+    top_k = round(N * 0.35)
+    bottom_k = round(N * 0.35)
+    
+    # 确保 top_k 和 bottom_k 至少为 1（N 极小时）
+    top_k = max(1, top_k)
+    bottom_k = max(1, bottom_k)
+    
+    # 防止 top + bottom 超过 N
+    if top_k + bottom_k > N:
+        top_k = math.ceil(N / 2)
+        bottom_k = N - top_k
+    
+    if scheme.upper() == "C":
+        middle_k = 0  # 丢弃中间 30%
+    else:  # Scheme A
+        middle_k = N - top_k - bottom_k
+    
+    return top_k, middle_k, bottom_k
+
+
 class PositiveAgent:
     """
     正向因子生成代理（带报告版本）
@@ -68,6 +107,7 @@ class PositiveAgent:
     核心改动：
     - 输入：previous_factors = [{'code': '...', 'report': '...'}, ...]
     - Prompt：展示自然语言分析（而非数值分数）
+    - 统一因子分配方案（Scheme A / C）
     """
 
     # ================= 初始化 =================
@@ -78,6 +118,10 @@ class PositiveAgent:
         self.factors_per_round = int(_cfg_get('FACTORS_PER_ROUND', _cfg_get('N_FACTORS', 10)))
         self.logs_dir = Path(_cfg_get('LOGS_DIR', _CUR / "logs"))
         _ensure_dir(self.logs_dir)
+
+        # 因子分配方案（新增）
+        self.allocation_scheme = str(_cfg_get('ALLOCATION_SCHEME', 'A')).upper()
+        self.logger.info(f"因子分配方案: Scheme {self.allocation_scheme}")
 
         # 列名白名单（严格校验用）
         self.field_whitelist: List[str] = [str(c) for c in FIELD_WHITELIST]
@@ -120,66 +164,76 @@ class PositiveAgent:
         """
         target_n = int(n_override) if (n_override and n_override > 0) else self.factors_per_round
 
-
-        # 在上面代码块后面添加以下代码：
-        # ========== 新增：对因子进行排序和分组 ========== #
-        # 尝试从 previous_factors 中获取 val_score 用于排序
+        # ========== 对因子进行排序和分组 ========== #
         prev_pairs_with_score = []
         for f in previous_factors or []:
             code = str(f.get('code', '')).strip()
             if not code:
                 continue
             report = str(f.get('report', '')).strip()
-            val_score = f.get('val_score', -999)  # 用于排序
-            train_score_val = f.get('train_score', -999)  # 用于展示给GPT
+            val_score = f.get('val_score', -999)
+            train_score_val = f.get('train_score', -999)
             
             prev_pairs_with_score.append({
                 'code': code, 
                 'report': report, 
-                'train_score': train_score_val,  # ← 修复 NameError
-                'val_score': val_score,          # ← 用于内部排序，不传给GPT             
+                'train_score': train_score_val,
+                'val_score': val_score,
             })
 
-        # 按 val_score 排序
+        # 按 val_score 排序（内部排序，不传给 GPT）
         prev_pairs_with_score.sort(key=lambda x: x.get('val_score', -999), reverse=True)
 
-        # 分离 top 和 bottom 和middle
-        top_k = min(4, len(prev_pairs_with_score))
-        bottom_k = min(3, len(prev_pairs_with_score))
-        middle_k = 3
+        # ========== 统一比例分配（不区分因子数量）========== #
+        N = len(prev_pairs_with_score)
+        top_k, middle_k, bottom_k = allocate_factors(N, self.allocation_scheme)
         
+        # 安全裁剪
+        top_k = min(top_k, N)
+        bottom_k = min(bottom_k, max(0, N - top_k))
+        middle_k = min(middle_k, max(0, N - top_k - bottom_k))
+        
+        self.logger.info(
+            f"因子分配 (Scheme {self.allocation_scheme}): "
+            f"N={N}, top={top_k}, middle={middle_k}, bottom={bottom_k}"
+        )
+        
+        # 分离 top / middle / bottom
         top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
-        bottom_factors = prev_pairs_with_score[-bottom_k:] if len(prev_pairs_with_score) > bottom_k else []
+        bottom_factors = prev_pairs_with_score[-bottom_k:] if bottom_k > 0 and len(prev_pairs_with_score) > bottom_k else prev_pairs_with_score[-bottom_k:] if bottom_k > 0 else []
         
-        mid_start = top_k
-        mid_end = max(mid_start, len(prev_pairs_with_score) - bottom_k)
-        middle_pool = prev_pairs_with_score[mid_start:mid_end]
-        if len(middle_pool) >= middle_k:
-            step = max(1, len(middle_pool) // middle_k)
-            middle_factors = [middle_pool[i * step] for i in range(middle_k)]
+        # Middle: 从 top 和 bottom 之间均匀采样
+        if middle_k > 0:
+            mid_start = top_k
+            mid_end = max(mid_start, N - bottom_k)
+            middle_pool = prev_pairs_with_score[mid_start:mid_end]
+            if len(middle_pool) >= middle_k:
+                step = max(1, len(middle_pool) // middle_k)
+                middle_factors = [middle_pool[i * step] for i in range(middle_k)]
+            else:
+                middle_factors = middle_pool
         else:
-            middle_factors = middle_pool
+            middle_factors = []
 
-        # 更新原来的 prev_pairs（保持兼容性）
+        # 保持兼容性
         prev_pairs = prev_pairs_with_score
 
         if not prev_pairs:
             self.logger.warning("上一轮有效记忆为空（需要包含 code+report）。将以零上下文请求 GPT。")
 
-        # ========= 分批首呼：显著降低长 JSON 被截断的概率 ========= #
+        # ========= 分批首呼 ========= #
         codes: List[str] = []
         need = target_n
         batch = max(1, min(self.batch_size, need))
         batch_idx = 0
         while need > 0:
             batch_idx += 1
-            # 传入分组信息
             prompt = self._build_prompt(
                 prev_pairs, 
                 batch,
-                top_factors=top_factors,      # 传入 top 因子
-                bottom_factors=bottom_factors,  # 传入 bottom 因子
-                middle_factors=middle_factors  # ← 加这行
+                top_factors=top_factors,
+                bottom_factors=bottom_factors,
+                middle_factors=middle_factors
             )
             self.logger.info(f"Round {round_num}: 调用 GPT 生成 {batch} 个新因子")
             resp = call_gpt(prompt, temperature=self.temperature, max_tokens=self.max_tokens)
@@ -191,7 +245,6 @@ class PositiveAgent:
 
             got = self._parse_and_transform(resp, batch)
 
-            # 去重并并入
             seen = set(self._norm_key(c) for c in codes)
             for c in got:
                 k = self._norm_key(c)
@@ -207,7 +260,7 @@ class PositiveAgent:
             exist_keys = set(self._norm_key(c) for c in existing_codes if isinstance(c, str))
             codes = [c for c in codes if self._norm_key(c) not in exist_keys]
 
-        # 补货（仍然保留，以防极端情况下首呼/分批仍有损耗）
+        # 补货
         attempts = 0
         consecutive_no_progress = 0
         last_count = 0
@@ -265,18 +318,18 @@ class PositiveAgent:
     
     def _build_prompt(
         self, 
-        prev_pairs: List[Dict],  # 保持不变
+        prev_pairs: List[Dict],
         target_n: int,
         top_factors: Optional[List[Dict]] = None,    
         bottom_factors: Optional[List[Dict]] = None,   
-        middle_factors: Optional[List[Dict]] = None,   # ← 新增新增
+        middle_factors: Optional[List[Dict]] = None,
     ) -> str:
         """
         构建生成 Prompt（带报告版本）
         
-        核心改动：
-        - 不再使用 JSON 格式展示
-        - 改用自然语言块展示 code + analysis
+        根据 allocation_scheme 自动调整展示策略：
+        - Scheme A: Top(strengths) + Middle(neutral完整报告) + Bottom(weaknesses)
+        - Scheme C: Top(strengths) + Bottom(weaknesses)，无 middle
         """
         rules = (
             "You generate quarterly factor code on a pandas DataFrame named `data`.\n"
@@ -290,8 +343,6 @@ class PositiveAgent:
             "- Use ONLY allowed columns (whitelist below). Handle zero-divisions inside <EXPR> with np.where.\n"
             "- For <EXPR> avoid future/lead/shift(-k); no loops/imports/functions.\n"
             "- Keep code concise (≤ 240 chars).\n\n"
-
-             # ====== 新增：明确禁止在 numpy array 上调用 pandas 方法 ====== #
             "**CRITICAL - AVOID NUMPY ARRAY METHODS:**\n"
             "- NEVER write: np.where(...).rank() or np.where(...).rolling() or np.where(...).pct_change()\n"
             "- np.where() returns a numpy array, which does NOT have .rank(), .rolling(), .shift(), .pct_change() methods\n"
@@ -300,34 +351,24 @@ class PositiveAgent:
             "  ✓ CORRECT: data['col1'].rank() / data['col2']\n"
             "  ✗ WRONG: np.where(data['col']==0, 0, data['col1']/data['col2']).rolling(4)\n"
             "  ✗ WRONG: np.where(data['col']==0, 0, expr).rank()\n\n"
-            )
-        
-        # 示例项（使用白名单字段）
-        example_item = (
-            "{\"id\":\"r01_01\",\"code\":\"data['factor_score']=pd.Series("
-            "np.where(data['atq']==0,0,(data['ibq']-data['txpq'])/data['atq'])"
-            ",index=data.index).replace([np.inf,-np.inf],np.nan).fillna(0)\"}"
         )
         
-        # ========== 改进版：对比学习式历史展示 ========== #
+        # ========== 对比学习式历史展示 ========== #
         history_block = ""
 
-        # 使用传入的 top_factors 和 bottom_factors（如果有）
         use_top = top_factors if top_factors else []
         use_bottom = bottom_factors if bottom_factors else []
         use_middle = middle_factors if middle_factors else []
 
-        # 如果没有传入分组，fallback 到原逻辑
+        # fallback（无分组传入时）
         if not use_top and not use_bottom and prev_pairs:
-            # 简单分组：前 30% 为 top，后 30% 为 bottom
             n = len(prev_pairs)
             top_n = max(1, min(3, n // 3))
             bottom_n = max(1, min(2, n // 3))
             use_top = prev_pairs[:top_n]
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
-            
 
-        # 展示 Top 因子（详细）
+        # === Top 因子：strengths 报告 ===
         if use_top:
             history_block += "=== HIGH-PERFORMING FACTORS (Learn from these patterns) ===\n\n"
             for i, p in enumerate(use_top, 1):
@@ -335,7 +376,6 @@ class PositiveAgent:
                 report = p.get('report', '').strip()
                 score = p.get('train_score', 'N/A')
                 
-                # 提取关键优点（从报告中）
                 strengths = self._extract_strengths(report)
                 
                 history_block += f"Top Factor #{i} (Train Score: {score}):\n"
@@ -343,23 +383,23 @@ class PositiveAgent:
                 if strengths:
                     history_block += f"✓ Key Strengths: {strengths}\n"
                 history_block += "\n"
+
+        # === Middle 因子：仅 Scheme A 展示，使用完整 neutral 报告 ===
         if use_middle:
-            history_block += "=== MIDDLE-PERFORMING FACTORS (Improve these) ===\n\n"
+            history_block += "=== MIDDLE-PERFORMING FACTORS (Understand what's average) ===\n\n"
             for i, p in enumerate(use_middle, 1):
                 code = p.get('code', '').strip()
                 report = p.get('report', '').strip()
                 score = p.get('train_score', 'N/A')
-                strengths = self._extract_strengths(report)
-                weaknesses = self._extract_weaknesses(report)
+                
                 history_block += f"Middle Factor #{i} (Train Score: {score}):\n"
-                history_block += f"```python\n{code[:200]}\n```\n"
-                if strengths:
-                    history_block += f"✓ Potential: {strengths}\n"
-                if weaknesses:
-                    history_block += f"✗ To Improve: {weaknesses}\n"
+                history_block += f"```python\n{code[:250]}\n```\n"
+                if report:
+                    # Scheme A: 展示完整报告（neutral，既有优点也有不足）
+                    history_block += f"Analysis:\n{report[:400]}\n"
                 history_block += "\n"
 
-        # 展示 Bottom 因子（简要，作为负例）
+        # === Bottom 因子：weaknesses 报告 ===
         if use_bottom:
             history_block += "=== LOW-PERFORMING FACTORS (Avoid these mistakes) ===\n\n"
             for i, p in enumerate(use_bottom, 1):
@@ -367,7 +407,6 @@ class PositiveAgent:
                 report = p.get('report', '').strip()
                 score = p.get('train_score', 'N/A')
                 
-                # 提取关键问题（从报告中）
                 weaknesses = self._extract_weaknesses(report)
                 
                 history_block += f"Failed Factor #{i} (Train Score: {score}):\n"
@@ -376,9 +415,27 @@ class PositiveAgent:
                     history_block += f"✗ Main Issues: {weaknesses}\n"
                 history_block += "\n"
 
-        # 如果完全没有历史
         if not history_block:
             history_block = "(No previous factors available - generating from scratch)\n\n"
+        
+        # === 学习策略（根据 scheme 调整）===
+        if use_middle:
+            # Scheme A: 有 middle
+            learning_strategy = (
+                "**Learning Strategy:**\n"
+                "1. BUILD ON top factors: Use similar calculation patterns, field combinations, and transformations\n"
+                "2. LEARN FROM middle factors: Understand what makes them average - they have partial merit but need improvement\n"
+                "3. AVOID bottom factors: Don't repeat their mistakes (high drawdown, low coverage, poor diversification)\n"
+                "4. INTRODUCE VARIATIONS: Don't copy exactly - try different field ratios, time windows, or normalizations\n\n"
+            )
+        else:
+            # Scheme C: 无 middle，纯正负对比
+            learning_strategy = (
+                "**Learning Strategy:**\n"
+                "1. BUILD ON top factors: Use similar calculation patterns, field combinations, and transformations\n"
+                "2. AVOID bottom factors: Don't repeat their mistakes (high drawdown, low coverage, poor diversification)\n"
+                "3. INTRODUCE VARIATIONS: Don't copy exactly - try different field ratios, time windows, or normalizations\n\n"
+            )
         
         return (
             rules +
@@ -386,11 +443,7 @@ class PositiveAgent:
             history_block +
             "=== YOUR TASK ===\n" +
             f"Generate EXACTLY {target_n} NEW factors that OUTPERFORM previous attempts.\n\n" +
-            "**Learning Strategy:**\n" +
-            "1. BUILD ON top factors: Use similar calculation patterns, field combinations, and transformations\n" +
-            "2. AVOID bottom factors: Don't repeat their mistakes (high drawdown, low coverage, poor diversification)\n" +
-            "3. IMPROVE middle factors: they have potential but need refinement\n" +
-            "4. INTRODUCE VARIATIONS: Don't copy exactly - try different field ratios, time windows, or normalizations\n\n" +
+            learning_strategy +
             "**Code-Level Guidelines:**\n" +
             "- Use robust transformations on pandas Series: (data['col1']/data['col2']).rank(), .rolling().mean()\n" +
             "- Remember: Call pandas methods (.rank, .rolling) on data['col'] or expressions, NOT on np.where()\n" +
@@ -399,35 +452,20 @@ class PositiveAgent:
             "- Ensure adequate data coverage (avoid excessive NaN)\n\n" 
         )
 
-    # ========== 修改 2: 添加新的检测函数 ========== #
+    # ========== numpy array 方法检测 ========== #
     def _check_numpy_array_methods(self, code: str, rejected: List[str]) -> bool:
         """
         检测是否在 numpy array 上调用 pandas 方法
-        
-        改进版本：正确处理嵌套括号
-        
-        常见错误模式:
-        - np.where(...).rank()
-        - np.where(...).rolling()
-        - np.where(...).pct_change()
-        - np.where(...).shift()
         """
         import re
         
-        # 改进的检测方法：不依赖于匹配完整的括号结构
-        # 而是检测 np.where 后面是否出现了 ).method( 模式
         if 'np.where' in code:
-            # 找到所有 np.where 的位置
             for match in re.finditer(r'np\.where', code, re.IGNORECASE):
                 start = match.start()
-                # 查看后续 200 个字符（足够覆盖一个 np.where 调用）
                 snippet = code[start:start+200]
                 
-                # 检测是否有 ).method( 模式
-                # 这表示在某个括号表达式的结果上调用了方法
                 method_pattern = r'\)\s*\.\s*(rank|rolling|pct_change|shift|diff|resample|cumsum|cumprod)\s*\('
                 if re.search(method_pattern, snippet, re.IGNORECASE):
-                    # 找到了 np.where...后面跟着的 pandas 方法调用
                     match_obj = re.search(method_pattern, snippet, re.IGNORECASE)
                     if match_obj:
                         rejected.append(f"numpy_array_method:{match_obj.group(0)[:50]}")
@@ -435,14 +473,12 @@ class PositiveAgent:
         
         return True
 
-
-    # ========== 修改 4: 同样更新 _build_refill_prompt() ========== #
+    # ========== 补货 prompt ========== #
     def _build_refill_prompt(self, missing: int, reasons: List[str], existing_codes: List[str] = None) -> str:
         """构建补货 prompt"""
         reasons_txt = ""
         if reasons:
             reasons_txt = "Previously rejected reasons: " + "; ".join(set(reasons[:6])) + "\n"
-            # 特别提醒 numpy array 问题
             if any('numpy_array_method' in r for r in reasons):
                 reasons_txt += "\n**CRITICAL**: Some factors were rejected for calling pandas methods on numpy arrays.\n"
                 reasons_txt += "Remember: np.where() returns numpy array, use pandas Series for .rank()/.rolling() etc.\n"
@@ -472,7 +508,7 @@ class PositiveAgent:
             "Do not use semicolons, no second assignment, no code fences, no `json` prefix."
         )
 
-    # ================= 解析与清洗（复用 baseline 逻辑）=================
+    # ================= 解析与清洗 =================
     _DATA_ASSIGN = re.compile(r"data\[['\"]factor_score['\"]\]\s*=", flags=re.IGNORECASE)
     _COLREF = re.compile(r"data\[['\"]([A-Za-z0-9_]+)['\"]\]")
 
@@ -509,7 +545,6 @@ class PositiveAgent:
         if not report or not report.strip():
             return ""
         
-        # 关键词：成功相关
         success_keywords = [
             'strength', 'good', 'high', 'effective', 'excellent', 
             'consistent', 'robust', 'advantage', 'positive', 'strong'
@@ -520,10 +555,9 @@ class PositiveAgent:
         
         for line in lines:
             line_lower = line.lower()
-            # 匹配包含成功关键词的句子
             if any(kw in line_lower for kw in success_keywords):
                 relevant.append(line.strip())
-                if len(relevant) >= 2:  # 最多取 2 句
+                if len(relevant) >= 2:
                     break
         
         if relevant:
@@ -532,16 +566,13 @@ class PositiveAgent:
                 result = result[:max_chars] + "..."
             return result
         
-        # 如果没找到，返回报告前 150 字符
         return report[:150].strip() + "..." if len(report) > 150 else report.strip()
     
-
     def _extract_weaknesses(self, report: str, max_chars: int = 200) -> str:
         """从报告中提取失败原因"""
         if not report or not report.strip():
             return ""
         
-        # 关键词：失败相关
         failure_keywords = [
             'weakness', 'weak', 'poor', 'low', 'risk', 'problem', 
             'issue', 'drawdown', 'avoid', 'negative', 'bad', 'insufficient'
@@ -552,10 +583,9 @@ class PositiveAgent:
         
         for line in lines:
             line_lower = line.lower()
-            # 匹配包含失败关键词的句子
             if any(kw in line_lower for kw in failure_keywords):
                 relevant.append(line.strip())
-                if len(relevant) >= 2:  # 最多取 2 句
+                if len(relevant) >= 2:
                     break
         
         if relevant:
@@ -564,10 +594,8 @@ class PositiveAgent:
                 result = result[:max_chars] + "..."
             return result
         
-        # 如果没找到，返回报告前 150 字符
         return report[:150].strip() + "..." if len(report) > 150 else report.strip()
 
-    
     def _force_single_assignment(self, code: str) -> str:
         """强制重写为单语句（改进版 - 处理 JSON 污染）"""
         if not isinstance(code, str):
@@ -575,55 +603,42 @@ class PositiveAgent:
         s = code.strip()
         s = self._preclean_json_text(s)
         
-        # ===== 新增：清理可能混入的 JSON 片段 ===== #
-        # 如果代码中包含 "},{"，说明混入了多个 JSON 对象
         if '"},{"' in s or '\"},{"' in s:
-            # 只取第一个完整的赋值语句
-            # 在 data['factor_score'] = ... 之后，遇到 "},{ 就停止
             json_marker_pos = s.find('"},{"')
             if json_marker_pos == -1:
                 json_marker_pos = s.find('\"},{"')
             if json_marker_pos != -1:
                 s = s[:json_marker_pos].strip()
         
-        # 提取赋值语句的右侧
         m = re.search(r"data\[['\"]factor_score['\"]\]\s*=\s*(.+)", s, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return ""
         rhs = m.group(1).strip()
         
-        # ===== 新增：更激进地清理尾部的 JSON 污染 ===== #
-        # 移除末尾的 "},{... 或 "}... 等 JSON 片段
         for json_end in ['"}', '"},{', '\"},', '\"},{']:
             if json_end in rhs:
                 pos = rhs.find(json_end)
                 rhs = rhs[:pos].strip()
         
-        # 处理多行代码（只取第一条语句）
         for sep in [";", "\n", "\r"]:
             p = rhs.find(sep)
             if p != -1:
                 rhs = rhs[:p].strip()
                 break
         
-        # 如果是 JSON 对象，拒绝
         if rhs.startswith("{"):
             return ""
         
-        # 检查是否已经是完整的 pd.Series(...).replace(...).fillna(...) 格式
         if (rhs.startswith("pd.Series(") and 
             ".replace([np.inf,-np.inf],np.nan)" in rhs and 
             ".fillna(0)" in rhs):
-            # 已经是完整格式，直接返回
             return f"data['factor_score']={rhs}"
         
-        # 否则才包装
         return (
             "data['factor_score']=pd.Series("
             f"{rhs}"
             ",index=data.index).replace([np.inf,-np.inf],np.nan).fillna(0)"
         )
-
 
     def _all_columns_allowed(self, code: str, rejected: List[str]) -> bool:
         if not self.field_set_lower:
@@ -674,7 +689,6 @@ class PositiveAgent:
 
         c = single.strip()
 
-            # ====== 新增检查：必须在其他检查之前 ====== #
         if not self._check_numpy_array_methods(c, rejected):
             return None
         
@@ -735,14 +749,12 @@ class PositiveAgent:
         """解析 GPT 响应"""
         self._last_reject_reasons: List[str] = []
 
-        # 1) 严格 JSON
         codes, reject = self._try_parse_json_factors(text)
         self._last_reject_reasons.extend(reject)
         if len(codes) >= target_n:
             self.logger.debug(f"reject_reasons={list(set(self._last_reject_reasons))[:12]}")
             return codes[:target_n]
 
-        # 2) 回退：按前缀切片
         cands = self._split_candidates(text)
         cleaned = list(codes)
         seen = set(self._norm_key(c) for c in cleaned)
@@ -761,8 +773,6 @@ class PositiveAgent:
 
         self.logger.debug(f"reject_reasons={list(set(self._last_reject_reasons))[:12]}")
         return cleaned
-    
-    
 
     # ================= 日志保存 =================
     def _save_gpt_response(self, round_num: int, prompt: str, resp: str, suffix: str = "") -> None:
@@ -772,6 +782,7 @@ class PositiveAgent:
             json.dump({
                 "round": round_num,
                 "strict_memory": self.strict_memory,
+                "allocation_scheme": self.allocation_scheme,
                 "prompt_preview": prompt[:1200],
                 "response": resp[:50000]
             }, f, ensure_ascii=False, indent=2)
