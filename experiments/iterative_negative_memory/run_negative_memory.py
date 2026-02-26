@@ -44,7 +44,7 @@ from .config import (
     LOGS_DIR,
     MAX_ROUNDS,
     FACTORS_PER_ROUND,
-    NEGATIVE_SAMPLES_COUNT,
+    NEGATIVE_SAMPLES_RATIO,
     BASELINE_FILE,
 )
 
@@ -194,7 +194,7 @@ def show_experiment_config(logger: logging.Logger) -> None:
     logger.info(f"")
     logger.info(f"迭代轮数: {MAX_ROUNDS}")
     logger.info(f"每轮因子数: {FACTORS_PER_ROUND}")
-    logger.info(f"负样本数: {NEGATIVE_SAMPLES_COUNT}")
+    logger.info(f"负样本比例: {NEGATIVE_SAMPLES_RATIO:.0%}")
     logger.info(f"")
     logger.info(f"评分公式: val_score = (sharpe + ann_ret + D) / 3")
     logger.info(f"D 定义: D = 1 - max_dd")
@@ -459,7 +459,7 @@ def save_experiment_summary(
         "config": {
             "max_rounds": MAX_ROUNDS,
             "factors_per_round": FACTORS_PER_ROUND,
-            "negative_samples_count": NEGATIVE_SAMPLES_COUNT,
+            "negative_samples_ratio": NEGATIVE_SAMPLES_RATIO,
         },
         "results": results,
         "final_analysis": final_analysis,
