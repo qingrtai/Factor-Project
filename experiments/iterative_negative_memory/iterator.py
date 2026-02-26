@@ -26,8 +26,9 @@ import pandas as pd
 # ========== 本地模块导入 ========== #
 from .config import (
     FACTORS_PER_ROUND,
-    NEGATIVE_SAMPLES_COUNT,
+    NEGATIVE_SAMPLES_RATIO,
     MAX_GENERATION_ATTEMPTS,
+    BASELINE_FILE,
 )
 from .memory_manager import MemoryManager
 from .positive_agents import PositiveAgents
@@ -62,7 +63,12 @@ class FactorIterator:
         
         # 配置参数
         self.factors_per_round = FACTORS_PER_ROUND
-        self.negative_count = NEGATIVE_SAMPLES_COUNT
+        baseline_df = pd.read_csv(BASELINE_FILE)
+        self.negative_count = max(1, int(len(baseline_df) * NEGATIVE_SAMPLES_RATIO))
+        self.logger.info(
+            f"  - Negative samples: {self.negative_count} "
+            f"({NEGATIVE_SAMPLES_RATIO:.0%} of {len(baseline_df)} baseline factors)"
+        )
         self.max_attempts = MAX_GENERATION_ATTEMPTS
 
         # ========== 新增：从全局配置读取 periods_per_year ========== #
