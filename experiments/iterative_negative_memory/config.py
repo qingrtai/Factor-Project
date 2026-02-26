@@ -19,7 +19,7 @@ from pathlib import Path
 MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
 FACTORS_PER_ROUND = 10            # 每轮生成因子数
-NEGATIVE_SAMPLES_COUNT = 3        # 每轮生成负样本数（Round 1 会被覆盖为 0）
+NEGATIVE_SAMPLES_RATIO = 0.35
 MAX_GENERATION_ATTEMPTS = 12      # 增加尝试次数（原 10 → 12）
 
 # =============================================================================
@@ -88,7 +88,7 @@ CONFIG = {
     "MAX_ROUNDS": MAX_ROUNDS,
     "MIN_ROUNDS": MIN_ROUNDS,
     "FACTORS_PER_ROUND": FACTORS_PER_ROUND,
-    "NEGATIVE_SAMPLES_COUNT": NEGATIVE_SAMPLES_COUNT,
+    "NEGATIVE_SAMPLES_RATIO": NEGATIVE_SAMPLES_RATIO,
     "MAX_GENERATION_ATTEMPTS": MAX_GENERATION_ATTEMPTS,
     
     # 路径
@@ -131,11 +131,8 @@ def validate_config():
         errors.append("MAX_ROUNDS必须大于0")
     if FACTORS_PER_ROUND <= 0:
         errors.append("FACTORS_PER_ROUND必须大于0")
-    if NEGATIVE_SAMPLES_COUNT < 0:
-        errors.append("NEGATIVE_SAMPLES_COUNT不能为负")
-    
-    if NEGATIVE_SAMPLES_COUNT == 0:
-        warnings.append("NEGATIVE_SAMPLES_COUNT为0，将退化为baseline")
+    if NEGATIVE_SAMPLES_RATIO < 0 or NEGATIVE_SAMPLES_RATIO > 1:
+        errors.append("NEGATIVE_SAMPLES_RATIO 必须在 0~1 之间")
     
     return errors, warnings
 
@@ -146,7 +143,7 @@ def print_config_summary():
     print("=" * 60)
     print(f"轮数: {MAX_ROUNDS}")
     print(f"每轮因子数: {FACTORS_PER_ROUND}")
-    print(f"负样本数: {NEGATIVE_SAMPLES_COUNT} (Round 1 = 0)")
+    print(f"负样本比例: {NEGATIVE_SAMPLES_RATIO:.0%}")
     print(f"GPT Temperature: {GPT_TEMPERATURE}")
     print(f"最大尝试次数: {MAX_GENERATION_ATTEMPTS}")
     print(f"Baseline: {BASELINE_FILE}")
