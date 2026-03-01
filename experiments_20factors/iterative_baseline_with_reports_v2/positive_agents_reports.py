@@ -144,11 +144,15 @@ class PositiveAgent:
         prev_pairs_with_score.sort(key=lambda x: x.get('val_score', -999), reverse=True)
 
         # 分离 top 和 bottom
-        top_k = min(4, len(prev_pairs_with_score))
-        bottom_k = min(2, len(prev_pairs_with_score))
+        # Scheme A: top 35% / middle 30% / bottom 35%
+        n_prev = len(prev_pairs_with_score)
+        top_k = max(1, int(round(n_prev * 0.35))) if n_prev > 0 else 0
+        bottom_k = max(1, int(round(n_prev * 0.35))) if n_prev > 0 else 0
 
         top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
-        bottom_factors = prev_pairs_with_score[-bottom_k:] if len(prev_pairs_with_score) > bottom_k else []
+        middle_factors = prev_pairs_with_score[top_k:n_prev - bottom_k] if n_prev > (top_k + bottom_k) else []
+        bottom_factors = prev_pairs_with_score[-bottom_k:] if n_prev > bottom_k else []
+
 
         # 更新原来的 prev_pairs（保持兼容性）
         prev_pairs = prev_pairs_with_score
@@ -168,6 +172,7 @@ class PositiveAgent:
                 prev_pairs, 
                 batch,
                 top_factors=top_factors,      # 传入 top 因子
+                middle_factors=middle_factors,
                 bottom_factors=bottom_factors  # 传入 bottom 因子
             )
             self.logger.info(f"Round {round_num}: 调用 GPT 生成 {batch} 个新因子")
@@ -257,6 +262,7 @@ class PositiveAgent:
         prev_pairs: List[Dict],  # 保持不变
         target_n: int,
         top_factors: Optional[List[Dict]] = None,    # 新增
+        middle_factors: Optional[List[Dict]] = None,
         bottom_factors: Optional[List[Dict]] = None   # 新增
     ) -> str:
         """
@@ -302,15 +308,17 @@ class PositiveAgent:
 
         # 使用传入的 top_factors 和 bottom_factors（如果有）
         use_top = top_factors if top_factors else []
+        use_middle = middle_factors if middle_factors else []
         use_bottom = bottom_factors if bottom_factors else []
 
         # 如果没有传入分组，fallback 到原逻辑
         if not use_top and not use_bottom and prev_pairs:
-            # 简单分组：前 30% 为 top，后 30% 为 bottom
+            # 简单分组：前 35% 为 top，后 35% 为 bottom
             n = len(prev_pairs)
-            top_n = max(1, min(3, n // 3))
-            bottom_n = max(1, min(2, n // 3))
+            top_n = max(1, int(round(n * 0.35)))
+            bottom_n = max(1, int(round(n * 0.35)))
             use_top = prev_pairs[:top_n]
+            use_middle = prev_pairs[top_n:n - bottom_n]
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
 
         # 展示 Top 因子（详细）
@@ -330,6 +338,20 @@ class PositiveAgent:
                     history_block += f"✓ Key Strengths: {strengths}\n"
                 history_block += "\n"
 
+        # 展示 Middle 因子（参考）
+        if use_middle:
+            history_block += "=== MIDDLE-PERFORMING FACTORS (Reference - room for improvement) ===\n\n"
+            for i, p in enumerate(use_middle, 1):
+                code = p.get('code', '').strip()[:250]
+                report = p.get('report', '').strip()
+                score = p.get('train_score', 'N/A')
+                
+                history_block += f"Mid #{i} (Train Score: {score:.4f}):\n" if isinstance(score, (int, float)) else f"Mid #{i}:\n"
+                history_block += f"```python\n{code}\n```\n"
+                if report:
+                    history_block += f"→ Analysis: {report[:150].strip()}...\n"
+                history_block += "\n"
+            
         # 展示 Bottom 因子（简要，作为负例）
         if use_bottom:
             history_block += "=== LOW-PERFORMING FACTORS (Avoid these mistakes) ===\n\n"
