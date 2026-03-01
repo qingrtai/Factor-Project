@@ -226,22 +226,15 @@ class PositiveAgents:  # ← 类名改为复数
         positives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'positive']
         negatives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'negative']
 
-        # v2: top-4, middle-3, bottom-0, negative-3
-        top_k = min(4, len(positives))
-        middle_k = 3
-        bottom_k = 0
-        
+        # Scheme A: top 35% / middle 30% / bottom replaced by negatives
+        n_pos = len(positives)
+        top_k = max(1, int(round(n_pos * 0.35))) if n_pos > 0 else 0
+        bottom_k = max(1, int(round(n_pos * 0.35))) if n_pos > 0 else 0
+
         top_factors = positives[:top_k] if positives else []
-        
-        # middle: 从 top_k 之后取 middle_k 个
-        middle_start = top_k
-        middle_end = min(top_k + middle_k, len(positives))
-        middle_factors = positives[middle_start:middle_end] if len(positives) > middle_start else []
-        
-        bottom_factors = []  # bottom_k=0，不展示
-        
-        # 负样本单独处理（作为反面教材）
-        negative_factors = negatives[:3] if negatives else []
+        middle_factors = positives[top_k:n_pos - bottom_k] if n_pos > (top_k + bottom_k) else []
+        bottom_factors = []  # Scheme A negative: bottom 由 GPT 负样本替代
+        negative_factors = negatives  # 数量由 config.NEGATIVE_SAMPLES_COUNT 控制
 
         prev_pairs = prev_pairs_with_score
 
@@ -390,14 +383,16 @@ class PositiveAgents:  # ← 类名改为复数
 
         use_top = top_factors if top_factors else []
         use_bottom = bottom_factors if bottom_factors else []
+        use_middle = middle_factors if middle_factors else []
         use_negative = negative_factors if negative_factors else []
 
         # Fallback 到原逻辑
         if not use_top and not use_bottom and prev_pairs:
             n = len(prev_pairs)
-            top_n = max(1, min(3, n // 3))
-            bottom_n = max(1, min(2, n // 3))
+            top_n = max(1, int(round(n * 0.35)))
+            bottom_n = max(1, int(round(n * 0.35)))
             use_top = prev_pairs[:top_n]
+            use_middle = prev_pairs[top_n:n - bottom_n]
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
 
         # ========== Top 因子（学习对象）========== #
@@ -417,7 +412,6 @@ class PositiveAgents:  # ← 类名改为复数
                 history_block += "\n"
 
         # ========== Middle 因子（参考对象）========== #
-        use_middle = middle_factors if middle_factors else []
         if use_middle:
             history_block += "=== MIDDLE-PERFORMING FACTORS (Reference - room for improvement) ===\n\n"
             for i, p in enumerate(use_middle, 1):
