@@ -106,6 +106,7 @@ class PositiveAgents:  # ← 类名改为复数
         self.max_code_len = int(_cfg_get('MAX_CODE_LEN', 1500))
         self.forbidden_tokens = ['import', 'def ', 'class ', 'for ', 'while ', 'eval(', 'exec(']
         self.lookahead_tokens = ['shift(-', 'lead(', 'future']
+        self.blacklist_words = ['price', 'volume', 'high', 'low']
         
         # 生成参数
         self.refill_max_attempts = 3
@@ -376,7 +377,14 @@ class PositiveAgents:  # ← 类名改为复数
             "- Use ONLY allowed columns. Handle zero-divisions with np.where.\n"
             "- Avoid future/lead/shift(-k); no loops/imports/functions.\n"
             "- Keep code ≤ 240 chars.\n\n"
+            "**CRITICAL - AVOID NUMPY ARRAY METHODS:**\n"
+            "- NEVER write: np.where(...).rank() or np.where(...).rolling() or np.where(...).pct_change()\n"
+            "- np.where() returns a numpy array, which does NOT have .rank(), .rolling(), .shift(), .pct_change() methods\n"
+            "- If you need these transformations, apply them BEFORE np.where or on pandas Series directly:\n"
+            "  ✓ CORRECT: (data['col1']/data['col2']).rolling(4).mean()\n"
+            "  ✗ WRONG: np.where(data['col']==0, 0, expr).rank()\n\n"
         )
+        
         
         # ========== 历史因子展示 ========== #
         history_block = ""
@@ -473,6 +481,42 @@ class PositiveAgents:  # ← 类名改为复数
             "- Apply proper normalization\n" +
             "- Ensure adequate data coverage (avoid excessive NaN)\n\n" 
         )
+     
+    # ========== 修改 2: 添加新的检测函数 ========== #
+    def _check_numpy_array_methods(self, code: str, rejected: List[str]) -> bool:
+        """
+        检测是否在 numpy array 上调用 pandas 方法
+        
+        改进版本：正确处理嵌套括号
+        
+        常见错误模式:
+        - np.where(...).rank()
+        - np.where(...).rolling()
+        - np.where(...).pct_change()
+        - np.where(...).shift()
+        """
+        import re
+        
+        # 改进的检测方法：不依赖于匹配完整的括号结构
+        # 而是检测 np.where 后面是否出现了 ).method( 模式
+        if 'np.where' in code:
+            # 找到所有 np.where 的位置
+            for match in re.finditer(r'np\.where', code, re.IGNORECASE):
+                start = match.start()
+                # 查看后续 200 个字符（足够覆盖一个 np.where 调用）
+                snippet = code[start:start+200]
+                
+                # 检测是否有 ).method( 模式
+                # 这表示在某个括号表达式的结果上调用了方法
+                method_pattern = r'\)\s*\.\s*(rank|rolling|pct_change|shift|diff|resample|cumsum|cumprod)\s*\('
+                if re.search(method_pattern, snippet, re.IGNORECASE):
+                    # 找到了 np.where...后面跟着的 pandas 方法调用
+                    match_obj = re.search(method_pattern, snippet, re.IGNORECASE)
+                    if match_obj:
+                        rejected.append(f"numpy_array_method:{match_obj.group(0)[:50]}")
+                        return False
+        
+        return True
 
     def _build_refill_prompt(
         self, 
@@ -573,39 +617,62 @@ class PositiveAgents:  # ← 类名改为复数
 
     # ================= 代码清洗与校验 =================
     def _force_single_assignment(self, code: str) -> str:
-        """强制重写为单语句"""
+        """强制重写为单语句（改进版 - 处理 JSON 污染）"""
         if not isinstance(code, str):
             return ""
         s = code.strip()
         s = self._preclean_json_text(s)
         
+        # ===== 新增：清理可能混入的 JSON 片段 ===== #
+        # 如果代码中包含 "},{"，说明混入了多个 JSON 对象
+        if '"},{"' in s or '\"},{"' in s:
+            # 只取第一个完整的赋值语句
+            # 在 data['factor_score'] = ... 之后，遇到 "},{ 就停止
+            json_marker_pos = s.find('"},{"')
+            if json_marker_pos == -1:
+                json_marker_pos = s.find('\"},{"')
+            if json_marker_pos != -1:
+                s = s[:json_marker_pos].strip()
+        
+        # 提取赋值语句的右侧
         m = re.search(r"data\[['\"]factor_score['\"]\]\s*=\s*(.+)", s, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return ""
         rhs = m.group(1).strip()
         
-        # 处理多行（只取第一条）
+        # ===== 新增：更激进地清理尾部的 JSON 污染 ===== #
+        # 移除末尾的 "},{... 或 "}... 等 JSON 片段
+        for json_end in ['"}', '"},{', '\"},', '\"},{']:
+            if json_end in rhs:
+                pos = rhs.find(json_end)
+                rhs = rhs[:pos].strip()
+        
+        # 处理多行代码（只取第一条语句）
         for sep in [";", "\n", "\r"]:
             p = rhs.find(sep)
             if p != -1:
                 rhs = rhs[:p].strip()
                 break
         
+        # 如果是 JSON 对象，拒绝
         if rhs.startswith("{"):
             return ""
         
-        # 检查是否已经是完整格式
+        # 检查是否已经是完整的 pd.Series(...).replace(...).fillna(...) 格式
         if (rhs.startswith("pd.Series(") and 
             ".replace([np.inf,-np.inf],np.nan)" in rhs and 
             ".fillna(0)" in rhs):
+            # 已经是完整格式，直接返回
             return f"data['factor_score']={rhs}"
         
-        # 包装
+        # 否则才包装
         return (
             "data['factor_score']=pd.Series("
             f"{rhs}"
             ",index=data.index).replace([np.inf,-np.inf],np.nan).fillna(0)"
         )
+
+
 
     def _all_columns_allowed(self, code: str, rejected: List[str]) -> bool:
         """检查列名是否在白名单"""
@@ -618,8 +685,7 @@ class PositiveAgents:  # ← 类名改为复数
                 return False
         return True
 
-    def _forbidden_scan(self, code: str, rejected: List[str]) -> bool:
-        """扫描禁用词"""
+    def _forbidden_scan(self, code: str, rejected: List[str]) -> bool:  # ← 5个空格，应该是4个
         low = code.lower()
         for tok in self.forbidden_tokens:
             if tok in low:
@@ -628,6 +694,23 @@ class PositiveAgents:  # ← 类名改为复数
         for tok in self.lookahead_tokens:
             if tok in low:
                 rejected.append(f"lookahead:{tok.strip()}")
+                return False
+        for w in self.blacklist_words:
+            if w in low:
+                rejected.append(f"keyword:{w}")
+        return True
+
+
+      
+    def _no_bare_column_refs(self, code: str, rejected: List[str]) -> bool:
+        """要求所有列访问都写成 data['col']"""
+        if not self.field_whitelist:
+            return True
+        s = code
+        for col in self.field_whitelist:
+            pattern = r"(?<!data\[['\"])\b" + re.escape(col) + r"\b"
+            if re.search(pattern, s):
+                rejected.append(f"bare_column:{col}")
                 return False
         return True
 
@@ -643,7 +726,11 @@ class PositiveAgents:  # ← 类名改为复数
             return None
 
         c = single.strip()
+        if not self._check_numpy_array_methods(c, rejected):
+            return None
         if not self._forbidden_scan(c, rejected):
+            return None
+        if not self._no_bare_column_refs(c, rejected):
             return None
         if "data['factor_score']" not in c or "=" not in c:
             rejected.append("missing_assignment")
