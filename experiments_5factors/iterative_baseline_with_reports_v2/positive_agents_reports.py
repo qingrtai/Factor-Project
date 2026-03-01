@@ -144,9 +144,10 @@ class PositiveAgent:
         prev_pairs_with_score.sort(key=lambda x: x.get('val_score', -999), reverse=True)
 
         # 分离 top 和 bottom
-        top_k = min(4, len(prev_pairs_with_score))
-        bottom_k = min(2, len(prev_pairs_with_score))
-
+        n_prev = len(prev_pairs_with_score)
+        top_k = max(1, int(round(n_prev * 0.35))) if n_prev > 0 else 0
+        bottom_k = max(1, int(round(n_prev * 0.35))) if n_prev > 0 else 0
+       
         top_factors = prev_pairs_with_score[:top_k] if prev_pairs_with_score else []
         bottom_factors = prev_pairs_with_score[-bottom_k:] if len(prev_pairs_with_score) > bottom_k else []
 
@@ -308,8 +309,8 @@ class PositiveAgent:
         if not use_top and not use_bottom and prev_pairs:
             # 简单分组：前 30% 为 top，后 30% 为 bottom
             n = len(prev_pairs)
-            top_n = max(1, min(3, n // 3))
-            bottom_n = max(1, min(2, n // 3))
+            top_n = max(1, int(round(n * 0.35)))
+            bottom_n = max(1, int(round(n * 0.35)))
             use_top = prev_pairs[:top_n]
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
 
