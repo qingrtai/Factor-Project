@@ -390,9 +390,10 @@ class PositiveAgents:  # ← 类名改为复数
         # Fallback 到原逻辑
         if not use_top and not use_bottom and prev_pairs:
             n = len(prev_pairs)
-            top_n = max(1, min(3, n // 3))
-            bottom_n = max(1, min(2, n // 3))
+            top_n = max(1, int(round(n * 0.35)))
+            bottom_n = max(1, int(round(n * 0.35)))
             use_top = prev_pairs[:top_n]
+            use_middle = prev_pairs[top_n:n - bottom_n]    # ← 补上
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
 
         # ========== Top 因子（学习对象）========== #
