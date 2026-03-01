@@ -16,8 +16,8 @@ from pathlib import Path
 # 迭代轮次
 MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
-FACTORS_PER_ROUND = 10            # 每轮生成因子数
-NEGATIVE_SAMPLES_COUNT = 3        # ← FIXED: 改为3（was 5）
+FACTORS_PER_ROUND = 5           # 每轮生成因子数
+NEGATIVE_SAMPLES_COUNT = max(1, int(round(FACTORS_PER_ROUND * 0.35)))  
 MAX_GENERATION_ATTEMPTS = 8       # 每轮最大生成尝试次数
 FACTOR_GENERATION_MAX_TOKENS = 1800  # ← 新增
 
