@@ -3,7 +3,7 @@ from pathlib import Path
 
 # === 基础配置（复用 iterative_baseline）===
 MAX_ROUNDS = 3
-FACTORS_PER_ROUND = 10
+FACTORS_PER_ROUND = 20
 RESULTS_DIR = results_dir("iterative_baseline_with_reports_v2")
 BASELINE_FILE = results_dir("factor_baseline") / "baseline_factor_metrics.csv"
 LOGS_DIR = RESULTS_DIR / "logs"
@@ -20,8 +20,8 @@ FACTOR_GENERATION_MAX_TOKENS = 1200  # 增加到 1200（原来 900）
 GENERATION_TEMPERATURE = 0.8  # 新增：生成因子时的温度
 
 # === 报告策略（新增）===
-TOP_K_DETAILED = 3  # 前 K 个生成详细报告
-BOTTOM_K_BRIEF = 3  # 后 K 个生成简要报告（作为负例）
+TOP_K_DETAILED = max(1, int(round(FACTORS_PER_ROUND * 0.35)))  # = 7
+BOTTOM_K_BRIEF = max(1, int(round(FACTORS_PER_ROUND * 0.35)))  # = 7
 INCLUDE_COMPARATIVE_ANALYSIS = True  # 在提示词中包含对比分析
 
 # === 因子生成配置 ===
