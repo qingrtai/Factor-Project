@@ -19,7 +19,7 @@ from pathlib import Path
 MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
 FACTORS_PER_ROUND = 20            # 每轮生成因子数
-NEGATIVE_SAMPLES_COUNT = 5        # 每轮生成负样本数（Round 1 会被覆盖为 0）
+NEGATIVE_SAMPLES_COUNT = max(1, int(round(FACTORS_PER_ROUND * 0.35)))  # 5 → 7
 MAX_GENERATION_ATTEMPTS = 15      # 增加尝试次数（原 10 → 15）
 
 # =============================================================================
@@ -59,7 +59,7 @@ NEGATIVE_AGENT_CONFIG = {
 # =============================================================================
 
 POSITIVE_AGENT_CONFIG = {
-    "batch_size": 15,
+    "batch_size": 5,
     "min_code_similarity": 0.70,    # 提高 (原 0.50)，更严格的去重
     "use_negative_memory": True,
     "negative_weight": 0.3,
