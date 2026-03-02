@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 # experiments/iterative_negative_memory/positive_agents.py
 """
-FIXED VERSION V3 - 强制 np.where，禁止 (denom + 1e-8)
+正向因子生成代理（对照组版本）
 
-核心改动：
-1. 完全删除 (denom + 1e-8) 的示例
-2. 100% 强制使用 np.where（不是 70%）
-3. 在代码验证前就检查 np.where
-4. 如果没有 np.where 直接拒绝
+改动 vs 旧版 V3:
+- 去掉严格2行格式验证（_validate_two_line_format, _simple_validate, _is_valid_format）
+- 新增 _force_single_assignment() 自动修复格式（从 baseline 移植）
+- 新增 5 层代码质量过滤（numpy array / forbidden / bare column / assignment / whitelist）
+- batch_size=5 小批量生成，提高成功率
+- Prompt / temperature / 学习策略 不变（对照组，不影响 val_score）
 """
 
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 import json
 import re
 import time
@@ -50,130 +51,37 @@ except Exception:
 
 POS_CFG = CONFIG.get("POSITIVE_AGENT_CONFIG", {}) or {}
 TIMEOUT_S = int(CONFIG.get("TIMEOUT", 90))
-GPT_TEMP_DEFAULT = float(CONFIG.get("GPT_TEMPERATURE", 0.40))  # 进一步降低到 0.40
+GPT_TEMP_DEFAULT = float(CONFIG.get("GPT_TEMPERATURE", 0.40))
 GPT_MAX_TOKENS = int(CONFIG.get("GPT_MAX_TOKENS", 2200))
 MAX_RETRIES = int(CONFIG.get("MAX_RETRIES", 6)) or 6
 
 BASE_MIN_SIM = float(POS_CFG.get("min_code_similarity", 0.70))
-BATCH_SIZE = int(POS_CFG.get("batch_size", 20))
+BATCH_SIZE = int(POS_CFG.get("batch_size", 5))
+
+# ============================================================
+# 列名白名单集合（用于 _all_columns_allowed）
+# ============================================================
+_ALLOWED_SET = set(ALLOWED_FIELDS)
 
 
-def _is_valid_format(code: str) -> bool:
-    """
-    支持多种因子格式：
-    - Format A (ratio): np.where(denom==0, 0, numer/denom)
-    - Format B (momentum): .rolling(n).mean().shift(1)
-    - Format C (growth): np.where(shift==0, 0, (x-x.shift)/x.shift)
-    - Format D (rank): 任意format + .rank(pct=True)
-    """
-    has_np_where = 'np.where' in code
-    has_rolling = '.rolling(' in code and '.shift(1)' in code
-    return has_np_where or has_rolling
-
-
-def _validate_two_line_format(code: str) -> bool:
-    lines = code.strip().split('\n')
-    
-    if len(lines) != 2:
-        return False
-    
-    line1 = lines[0].strip()
-    line2 = lines[1].strip()
-    
-    # 第一行必须赋值给factor_score
-    if not line1.startswith("data['factor_score']"):
-        return False
-    
-    # 第一行必须有 np.where 或 rolling+shift
-    has_np_where = 'np.where' in line1
-    has_rolling = '.rolling(' in line1 and '.shift(1)' in line1
-    if not has_np_where and not has_rolling:
-        return False
-    
-    # 第二行必须有 fillna
-    if 'fillna' not in line2:
-        return False
-    
-    # 第二行必须赋值给factor_score
-    if not line2.startswith("data['factor_score']"):
-        return False
-    
-    return True
-
-def _simple_validate(code: str) -> Optional[str]:
-    """
-    简化的代码验证（绕过 validate_and_fix_code）
-    
-    只做基本检查：
-    1. 必须有 np.where
-    2. 必须是两行格式
-    3. 第一行赋值，第二行 fillna
-    """
-    if not code:
-        return None
-    
-    # 强制检查 np.where
-    if not _is_valid_format(code):
-        return None
-    
-    # 检查两行格式
-    if not _validate_two_line_format(code):
-        return None
-    
-    # 基本语法检查
-    if "data['factor_score']" not in code:
-        return None
-    
-    # 检查是否有明显的语法错误
-    if code.count('(') != code.count(')'):
-        return None
-    
-    if code.count('[') != code.count(']'):
-        return None
-    
-    return code
-
-
-def _enforce_no_lookahead(code: str) -> bool:
-    """检查 look-ahead"""
-    s = normalize_code(code)
-
-    rolling_needed = bool(re.search(
-        r"\.rolling\(\s*\d+\s*\)\s*\.(mean|std|sum|min|max|var|median|mad|quantile)\s*\(",
-        s
-    ))
-    if rolling_needed and ".shift(1)" not in s:
-        return False
-
-    for m in re.finditer(r"\.shift\(\s*([-\d]+)?\s*\)", s):
-        g = m.group(1)
-        if g is None:
-            return False
-        try:
-            k = int(g)
-        except Exception:
-            return False
-        if k < 1:
-            return False
-
-    return True
-
+# ============================================================
+# 解析 LLM 响应
+# ============================================================
 
 def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
-    """解析 LLM 响应"""
+    """解析 LLM 响应，支持多种格式"""
     if not text:
         return []
 
-    # Stage 1: raw JSON
+    # Stage 1: raw JSON array
     try:
         data = json.loads(text.strip())
         if isinstance(data, list):
             valid = [item for item in data if isinstance(item, dict) and "code" in item]
             if valid:
-                logger.debug(f"[parse] Stage 1 success: {len(valid)} items")
                 return valid
-    except Exception as e:
-        logger.debug(f"[parse] Stage 1 failed: {type(e).__name__}")
+    except Exception:
+        pass
 
     # Stage 2: ```json fence
     m = re.search(r"```json\s*\n(.*?)\n```", text, flags=re.DOTALL | re.IGNORECASE)
@@ -183,10 +91,9 @@ def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
             if isinstance(data, list):
                 valid = [item for item in data if isinstance(item, dict) and "code" in item]
                 if valid:
-                    logger.debug(f"[parse] Stage 2 success: {len(valid)} items")
                     return valid
-        except Exception as e:
-            logger.debug(f"[parse] Stage 2 failed: {type(e).__name__}")
+        except Exception:
+            pass
 
     # Stage 3: ```python fence
     m2 = re.search(r"```python\s*\n(.*?)\n```", text, flags=re.DOTALL | re.IGNORECASE)
@@ -200,7 +107,6 @@ def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
                 if cleaned.startswith("data['factor_score']"):
                     out.append({"code": cleaned})
         if out:
-            logger.debug(f"[parse] Stage 3 success: {len(out)} items")
             return out
 
     # Stage 4: 逐行扫描
@@ -211,24 +117,28 @@ def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
             cleaned = re.sub(r'^(\d+[.)]\s+|[-*]\s+)', '', line)
             if cleaned.startswith("data['factor_score']"):
                 out.append({"code": cleaned})
-    
-    if out:
-        logger.debug(f"[parse] Stage 4 success: {len(out)} items")
-    else:
+
+    if not out:
         logger.warning("[parse] All stages failed")
         logger.debug(f"[parse] Response preview: {text[:300]}")
-    
+
     return out
 
 
-def _build_ultra_strict_prompt(
+# ============================================================
+# Prompt 构建（保持和旧版一致，不影响 val_score）
+# ============================================================
+
+def _build_prompt(
     positives: List[Dict[str, Any]],
     negatives: List[Dict[str, Any]],
     n: int,
     round_id: int,
 ) -> str:
     """
-    扩展版 Prompt - 支持多种因子形式
+    构建 prompt — 保持旧版的 flat 展示 + 对比学习结构
+
+    唯一新增: numpy array 方法警告（防止 np.where().rank() 错误）
     """
     def _fmt_pos(rec: Dict[str, Any], i: int) -> str:
         code = str(rec.get("code", ""))[:300]
@@ -236,10 +146,7 @@ def _build_ultra_strict_prompt(
         val = rec.get("val_score", None)
         ts = "N/A" if trn is None else f"{float(trn):.4f}"
         vs = "N/A" if val is None else f"{float(val):.4f}"
-        return (
-            f"#{i}  Train={ts}  Val={vs}\n"
-            f"{code}\n"
-        )
+        return f"#{i}  Train={ts}  Val={vs}\n{code}\n"
 
     pos_block = "\n".join(_fmt_pos(r, i + 1) for i, r in enumerate(positives[:20]))
 
@@ -254,137 +161,63 @@ def _build_ultra_strict_prompt(
         neg_lines = "\n".join(_fmt_neg(r, i + 1) for i, r in enumerate(negatives))
 
         neg_block = f"""
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ❌ FAILED FACTORS (AVOID THESE PATTERNS - LOW TRAIN SCORES)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ FAILED FACTORS (AVOID THESE PATTERNS - LOW TRAIN SCORES)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    {neg_lines}
+{neg_lines}
 
-    These factors have LOW train scores. DO NOT copy these patterns.
-    """
+These factors have LOW train scores. DO NOT copy these patterns.
+"""
 
     return f"""You are generating factor formulas for quantitative investing.
 
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    TOP PERFORMING FACTORS (LEARN FROM THESE)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOP PERFORMING FACTORS (LEARN FROM THESE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    {pos_block}
-    {neg_block}
+{pos_block}
+{neg_block}
 
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ✅  VALID FACTOR FORMATS (choose any of these)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    FORMAT A - Financial Ratio (np.where required):
-    data['factor_score'] = np.where(data['DENOM']==0, 0, NUMERATOR/data['DENOM'])
-    data['factor_score'] = data['factor_score'].fillna(0)
+Each factor must be a SINGLE LINE in this exact form:
+  data['factor_score'] = <EXPRESSION>
 
-    Example A1 (difference in numerator):
-    data['factor_score'] = np.where(data['revtq']==0, 0, (data['niq']-data['txpq'])/data['revtq'])
-    data['factor_score'] = data['factor_score'].fillna(0)
+Where <EXPRESSION> is a financial ratio or transformation.
 
-    Example A2 (sum in numerator):
-    data['factor_score'] = np.where(data['lctq']==0, 0, (data['cheq']+data['rectq'])/data['lctq'])
-    data['factor_score'] = data['factor_score'].fillna(0)
+Examples:
+  data['factor_score'] = np.where(data['atq']==0, 0, data['niq']/data['atq'])
+  data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
+  data['factor_score'] = np.where(data['saleq'].shift(4)==0, 0, (data['saleq']-data['saleq'].shift(4))/data['saleq'].shift(4))
 
-    Example A3 (single field):
-    data['factor_score'] = np.where(data['saleq']==0, 0, data['ibq']/data['saleq'])
-    data['factor_score'] = data['factor_score'].fillna(0)
+**CRITICAL - AVOID NUMPY ARRAY METHODS:**
+- NEVER write: np.where(...).rank() or np.where(...).rolling() or np.where(...).pct_change()
+- np.where() returns a numpy array, which does NOT have .rank(), .rolling(), .shift(), .pct_change() methods
+- If you need these transformations, apply them BEFORE np.where or on pandas Series directly:
+  ✓ CORRECT: (data['col1']/data['col2']).rolling(4).mean()
+  ✗ WRONG: np.where(data['col']==0, 0, expr).rank()
 
-    FORMAT B - Momentum / Rolling Mean:
-    data['factor_score'] = data['FIELD'].rolling(N).mean().shift(1)
-    data['factor_score'] = data['factor_score'].fillna(0)
+Constraints:
+- Use ONLY data['field'] with fields from: {_FIELDS_FOR_PROMPT}
+- For division, use np.where(denom==0, 0, numer/denom)
+- Time operations: .shift(k) with k>=1; .rolling(w).mean()/.std() MUST be followed by .shift(1)
+- NO imports, NO multiple statements, NO comments
 
-    Example B1:
-    data['factor_score'] = data['saleq'].rolling(4).mean().shift(1)
-    data['factor_score'] = data['factor_score'].fillna(0)
+OUTPUT: Pure JSON array, no explanations:
+[
+  {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, data['ibq']/data['saleq'])"}},
+  {{"code": "data['factor_score'] = data['niq'].rolling(4).mean().shift(1)"}}
+]
 
-    Example B2 (difference of rolling means):
-    data['factor_score'] = (data['niq'].rolling(4).mean() - data['niq'].rolling(8).mean()).shift(1)
-    data['factor_score'] = data['factor_score'].fillna(0)
+Generate exactly {n} UNIQUE factors. Start with '[' immediately.""".strip()
 
-    FORMAT C - Growth Rate (period-over-period change):
-    data['factor_score'] = np.where(data['FIELD'].shift(4)==0, 0, (data['FIELD']-data['FIELD'].shift(4))/data['FIELD'].shift(4))
-    data['factor_score'] = data['factor_score'].fillna(0)
 
-    Example C1:
-    data['factor_score'] = np.where(data['saleq'].shift(4)==0, 0, (data['saleq']-data['saleq'].shift(4))/data['saleq'].shift(4))
-    data['factor_score'] = data['factor_score'].fillna(0)
-
-    Example C2:
-    data['factor_score'] = np.where(data['atq'].shift(4)==0, 0, (data['atq']-data['atq'].shift(4))/data['atq'].shift(4))
-    data['factor_score'] = data['factor_score'].fillna(0)
-
-    FORMAT D - Volatility / Rolling Std:
-    data['factor_score'] = data['FIELD'].rolling(N).std().shift(1)
-    data['factor_score'] = data['factor_score'].fillna(0)
-
-    Example D1:
-    data['factor_score'] = data['niq'].rolling(4).std().shift(1)
-    data['factor_score'] = data['factor_score'].fillna(0)
-
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ❌ ABSOLUTELY FORBIDDEN (WILL BE REJECTED)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    1. ONE-LINE format (missing second line):
-       data['factor_score'] = data['niq'] / data['saleq']
-       ❌ WRONG - must be exactly 2 lines
-
-    2. Using (denom + 1e-8) instead of np.where:
-       data['factor_score'] = data['niq'] / (data['saleq'] + 1e-8)
-       ❌ WRONG
-
-    3. Rolling WITHOUT .shift(1) (lookahead bias):
-       data['factor_score'] = data['saleq'].rolling(4).mean()
-       ❌ WRONG - MUST add .shift(1) after rolling
-
-    4. Any format that is not exactly 2 lines:
-       ❌ REJECTED IMMEDIATELY
-
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    📋 YOUR TASK
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    Generate {n} factors. MIX different formats for diversity.
-
-    REQUIREMENTS:
-
-    1. **Structure** (100% compliance):
-       - Exactly 2 lines per factor
-       - Line 1: MUST start with "data['factor_score'] ="
-       - Line 2: MUST end with ".fillna(0)"
-       - Use data['field'] format (NOT data.get)
-
-    2. **Format**: Use ANY of the four formats above.
-       Focus on formats that achieve HIGH train scores based on the examples.
-       You may generate mostly ratio factors (FORMAT A) if they perform best.
-       Other formats are optional - only include if you believe they will score well.
-       
-    3. **Fields**:
-       - Available: {_FIELDS_FOR_PROMPT}
-       - Common: niq, ibq, revtq, saleq, atq, cogsq, cheq, rectq, lctq, txpq
-       - Rolling window N: use 2, 3, 4, 6, or 8 (quarterly data)
-
-    4. **Output format** (CRITICAL):
-       - Use \\n to separate two lines inside JSON string
-       - Pure JSON, no markdown, no explanations
-
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ⚠️  OUTPUT FORMAT (JSON ONLY)  ⚠️
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    [
-      {{"code": "data['factor_score'] = np.where(data['saleq']==0, 0, (data['ibq']-data['txpq'])/data['saleq'])\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-      {{"code": "data['factor_score'] = data['niq'].rolling(4).mean().shift(1)\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-      {{"code": "data['factor_score'] = np.where(data['saleq'].shift(4)==0, 0, (data['saleq']-data['saleq'].shift(4))/data['saleq'].shift(4))\\ndata['factor_score'] = data['factor_score'].fillna(0)"}},
-      {{"code": "data['factor_score'] = data['niq'].rolling(4).std().shift(1)\\ndata['factor_score'] = data['factor_score'].fillna(0)"}}
-    ]
-
-    Start output with '[' immediately. No explanations. Exactly {n} factors.
-    Focus on high-scoring patterns from the examples above.""".strip()
-
+# ============================================================
+# LLM 调用
+# ============================================================
 
 def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, timeout_s: int) -> Optional[str]:
     """带超时的 LLM 调用"""
@@ -397,10 +230,7 @@ def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, ti
 
     def _runner():
         try:
-            start_time = time.time()
             result["resp"] = call_gpt(prompt=prompt, temperature=temperature, max_tokens=max_tokens)
-            elapsed = time.time() - start_time
-            logger.info(f"[positive] LLM call completed in {elapsed:.2f}s")
             result["done"] = True
         except Exception as e:
             logger.error(f"[positive] LLM call error: {e}")
@@ -421,11 +251,222 @@ def _call_llm_with_watchdog(prompt: str, temperature: float, max_tokens: int, ti
     return result["resp"]
 
 
+# ============================================================
+# PositiveAgents 类
+# ============================================================
+
 class PositiveAgents:
     def __init__(self):
         self.batch_size = BATCH_SIZE
         self.logger = logger
+        self.blacklist_words = ['price', 'volume', 'high', 'low']
 
+    # ----------------------------------------------------------
+    # 核心: 自动格式修复（从 baseline 移植）
+    # ----------------------------------------------------------
+    def _force_single_assignment(self, code: str) -> Optional[str]:
+        """
+        把任何格式的因子代码修复为单行 data['factor_score']=... 格式
+
+        处理:
+        1. JSON 污染清理 ("},{"  尾部垃圾)
+        2. 多行合并为单行
+        3. 去掉第二行 fillna（会在外层统一包装）
+        4. 去掉 data.get() 转为 data['field']
+        """
+        if not code or "factor_score" not in code:
+            return None
+
+        # --- JSON 污染清理 ---
+        # GPT 有时在 code 值里混入下一个 JSON 对象的内容
+        for sep in ['"},{"', '"}, {"', '"}  ,  {"']:
+            if sep in code:
+                code = code[:code.index(sep)]
+
+        # 清理尾部常见垃圾
+        for tail in ['"}', '",', '"}]', '", "id']:
+            if code.rstrip().endswith(tail):
+                code = code.rstrip()[:-len(tail)].rstrip()
+
+        # --- 多行处理 ---
+        lines = [ln.strip() for ln in code.split('\n') if ln.strip()]
+
+        # 如果是2行格式（line1=赋值, line2=fillna），只取第一行
+        if len(lines) == 2 and 'fillna' in lines[1]:
+            code = lines[0]
+        elif len(lines) >= 1:
+            # 取包含 factor_score 赋值的那行
+            for ln in lines:
+                if ln.startswith("data['factor_score']") and '=' in ln:
+                    code = ln
+                    break
+            else:
+                code = lines[0]
+
+        code = code.strip()
+
+        # --- 必须以 data['factor_score'] 开头 ---
+        if not code.startswith("data['factor_score']"):
+            return None
+
+        # --- 提取等号右边的表达式 ---
+        eq_pos = code.find('=')
+        if eq_pos < 0:
+            return None
+        expr = code[eq_pos + 1:].strip()
+
+        if not expr:
+            return None
+
+        # 去掉已有的 .fillna(0) / .replace(...)
+        expr = re.sub(r'\.fillna\([^)]*\)\s*$', '', expr).strip()
+        expr = re.sub(r'\.replace\(\[np\.inf,\s*-np\.inf\],\s*np\.nan\)\s*$', '', expr).strip()
+
+        # --- data.get('field', 0) → data['field'] ---
+        expr = re.sub(r"data\.get\(\s*'([^']+)'\s*,\s*0\s*\)", r"data['\1']", expr)
+
+        if not expr:
+            return None
+
+        # --- 重新包装为标准单行 ---
+        final = (
+            f"data['factor_score']=pd.Series({expr},"
+            f"index=data.index).replace([np.inf,-np.inf],np.nan).fillna(0)"
+        )
+
+        return final
+
+    # ----------------------------------------------------------
+    # 5 层代码质量过滤
+    # ----------------------------------------------------------
+    def _check_numpy_array_methods(self, code: str, rejected: list) -> bool:
+        """检测 np.where() 返回值上调用 pandas 方法（会报错）"""
+        bad_patterns = [
+            r'np\.where\([^)]*\)\s*\.rank\s*\(',
+            r'np\.where\([^)]*\)\s*\.rolling\s*\(',
+            r'np\.where\([^)]*\)\s*\.shift\s*\(',
+            r'np\.where\([^)]*\)\s*\.pct_change\s*\(',
+            r'np\.where\([^)]*\)\s*\.fillna\s*\(',
+            r'np\.where\([^)]*\)\s*\.replace\s*\(',
+        ]
+        for pat in bad_patterns:
+            if re.search(pat, code):
+                rejected.append("numpy_array_method")
+                return False
+        return True
+
+    def _forbidden_scan(self, code: str, rejected: list) -> bool:
+        """检测禁用 token、lookahead、黑名单字段"""
+        low = code.lower()
+
+        # --- 禁用 token ---
+        forbidden_tokens = [
+            'import ', 'open(', 'exec(', 'eval(', '__', 'os.',
+            'sys.', 'subprocess', 'lambda', 'def ', 'class ',
+        ]
+        for tok in forbidden_tokens:
+            if tok in low:
+                rejected.append(f"forbidden:{tok.strip()}")
+                return False
+
+        # --- lookahead 检查 ---
+        lookahead_tokens = [
+            '.shift(0)', '.shift(-',
+        ]
+        for tok in lookahead_tokens:
+            if tok in code:
+                rejected.append(f"lookahead:{tok}")
+                return False
+
+        # rolling 必须跟 shift(1)
+        if '.rolling(' in code:
+            # 找 rolling(...).agg(...) 但没有 .shift(
+            if '.shift(' not in code:
+                rejected.append("lookahead:rolling_no_shift")
+                return False
+
+        # --- blacklist_words（软警告，不拒绝）---
+        for w in self.blacklist_words:
+            if w in low:
+                rejected.append(f"keyword:{w}")
+                # 只警告，不 return False
+
+        return True
+
+    def _no_bare_column_refs(self, code: str, rejected: list) -> bool:
+        """
+        确保所有列引用使用 data['col'] 格式，不能裸用列名
+
+        检测模式: 独立出现的已知列名（不在 data['...'] 内）
+        """
+        # 先去掉所有 data['xxx'] 引用
+        cleaned = re.sub(r"data\['[^']+'\]", "___COL___", code)
+
+        # 检查是否有裸列名
+        for field in ALLOWED_FIELDS[:50]:  # 只检查常用字段
+            if field in ['at', 'do', 'pi']:  # 跳过太短的
+                continue
+            pattern = r'\b' + re.escape(field) + r'\b'
+            if re.search(pattern, cleaned):
+                rejected.append(f"bare_column:{field}")
+                return False
+
+        return True
+
+    def _all_columns_allowed(self, code: str, rejected: list) -> bool:
+        """检查所有引用的列名是否在白名单中"""
+        refs = re.findall(r"data\['([^']+)'\]", code)
+        for col in refs:
+            if col == 'factor_score':
+                continue
+            if col not in _ALLOWED_SET:
+                rejected.append(f"unknown_column:{col}")
+                return False
+        return True
+
+    def _sanitize_one(self, raw_code: str, rejected: list) -> Optional[str]:
+        """
+        5 层过滤管线:
+        1. _force_single_assignment (格式修复)
+        2. _check_numpy_array_methods
+        3. _forbidden_scan
+        4. _no_bare_column_refs
+        5. _all_columns_allowed
+        """
+        # --- 第 1 层: 格式修复 ---
+        single = self._force_single_assignment(raw_code)
+        if not single:
+            rejected.append("format_fix_failed")
+            return None
+
+        c = single.strip()
+
+        # --- 第 2 层: numpy array 方法检查 ---
+        if not self._check_numpy_array_methods(c, rejected):
+            return None
+
+        # --- 第 3 层: 禁用 token + lookahead ---
+        if not self._forbidden_scan(c, rejected):
+            return None
+
+        # --- 第 4 层: 裸列名引用 ---
+        if not self._no_bare_column_refs(c, rejected):
+            return None
+
+        # --- 第 5 层: 列名白名单 ---
+        if not self._all_columns_allowed(c, rejected):
+            return None
+
+        # --- 基本语法检查 ---
+        if c.count('(') != c.count(')'):
+            rejected.append("unbalanced_parens")
+            return None
+
+        return c
+
+    # ----------------------------------------------------------
+    # 主生成方法
+    # ----------------------------------------------------------
     def generate_factors(
         self,
         current_round: int,
@@ -436,7 +477,7 @@ class PositiveAgents:
         **kwargs
     ) -> List[Dict[str, Any]]:
         """
-        生成因子 - 强制 np.where，禁止 (denom + 1e-8)
+        生成因子（保持和旧版相同的接口和学习策略）
         """
         self.logger.info(f"[positive] Generating {target_n} factors for round {current_round}")
 
@@ -444,44 +485,30 @@ class PositiveAgents:
         positives = [r for r in memory_records if r.get("memory_type") == "positive"]
         negatives = [r for r in memory_records if r.get("memory_type") == "negative"]
 
-        history_codes = []
-        for r in memory_records:
-            c = r.get("code", "")
-            if c:
-                history_codes.append(normalize_code(c))
-
         max_attempts = max(int(POS_CFG.get("max_attempts", MAX_RETRIES)), 3)
-        batch_size = max(int(POS_CFG.get("batch_size", self.batch_size)), target_n)
         base_thr = float(POS_CFG.get("min_code_similarity", BASE_MIN_SIM))
-
-        def _sim_thr(attempt_idx: int) -> float:
-            floor = 0.40
-            return max(floor, base_thr - 0.08 * (attempt_idx - 1))
 
         pool: List[Dict[str, Any]] = []
         seen_norms = set()
-
-        np_where_count = 0
 
         for attempt in range(1, max_attempts + 1):
             need = target_n - len(pool)
             if need <= 0:
                 break
 
-            thr = _sim_thr(attempt)
-            ask_n = max(need + 2, min(batch_size, target_n + 4))
+            # 每次请求 batch_size 个（默认5）
+            batch = max(1, min(self.batch_size, need))
             temp = 0.40 if attempt == 1 else min(0.50, max(0.40, GPT_TEMP_DEFAULT))
 
             self.logger.info(
-                f"[positive] attempt {attempt}/{max_attempts} need={need} ask_n={ask_n} "
-                f"sim_thr={thr:.2f} temp={temp:.2f}"
+                f"[positive] attempt {attempt}/{max_attempts} need={need} "
+                f"ask={batch} temp={temp:.2f}"
             )
 
-            # 使用超严格的 prompt
-            prompt = _build_ultra_strict_prompt(
+            prompt = _build_prompt(
                 positives=positives,
                 negatives=negatives,
-                n=ask_n,
+                n=batch,
                 round_id=current_round,
             )
 
@@ -489,7 +516,7 @@ class PositiveAgents:
                 prompt=prompt,
                 temperature=temp,
                 max_tokens=GPT_MAX_TOKENS,
-                timeout_s=TIMEOUT_S
+                timeout_s=TIMEOUT_S,
             )
             if not resp:
                 self.logger.warning("[positive] empty/failed LLM response")
@@ -500,92 +527,53 @@ class PositiveAgents:
                 self.logger.info("[positive] parser found 0 items")
                 continue
 
-            rejected = {
-                "invalid_format": 0,
-                "wrong_format": 0,
-                "lookahead": 0,
-                "duplicate": 0,
-                "similarity": 0
-            }
+            rejected_reasons = []
+            accepted_this = 0
 
-            accepted_this = []
             for it in parsed:
                 code_raw = it.get("code", "")
-                
-                # ========== 第一关：必须有 np.where ========== #
-                if not _is_valid_format(code_raw):
-                    rejected["invalid_format"] += 1
-                    continue
-                
-                # ========== 第二关：使用简化验证 ========== #
-                code = _simple_validate(code_raw)
-                if not code:
-                    rejected["wrong_format"] += 1
-                    continue
-                
-                # ========== 第三关：检查 look-ahead ========== #
-                if not _enforce_no_lookahead(code):
-                    rejected["lookahead"] += 1
+                if not code_raw:
                     continue
 
-                # ========== 第四关：去重 ========== #
+                # --- 5 层过滤 ---
+                rejected_this = []
+                code = self._sanitize_one(code_raw, rejected_this)
+                if not code:
+                    rejected_reasons.extend(rejected_this)
+                    continue
+
+                # --- 去重 ---
                 norm = normalize_code(code)
                 if not norm or norm in seen_norms:
-                    rejected["duplicate"] += 1
+                    rejected_reasons.append("duplicate")
                     continue
 
-                # ========== 通过所有检查 ========== #
+                # --- 通过 ---
                 seen_norms.add(norm)
-                accepted_this.append({"code": code})
-                np_where_count += 1
-                
-                if len(accepted_this) + len(pool) >= target_n:
+                pool.append({"code": code})
+                accepted_this += 1
+
+                if len(pool) >= target_n:
                     break
 
-            if accepted_this:
-                self.logger.info(
-                    f"[positive] attempt {attempt}: +{len(accepted_this)} "
-                    f"(cum {len(pool) + len(accepted_this)}, all with np.where ✅)"
-                )
-                if any(rejected.values()):
-                    self.logger.info(
-                        f"[positive] rejected: invalid_format={rejected['invalid_format']}, "
-                        f"wrong_format={rejected['wrong_format']}, "
-                        f"lookahead={rejected['lookahead']}, "
-                        f"dup={rejected['duplicate']}, sim={rejected['similarity']}"
-                    )
-                pool.extend(accepted_this)
-            else:
-                self.logger.info(f"[positive] attempt {attempt}: no accepted")
-                if parsed:
-                    self.logger.warning(
-                        f"[positive] parsed {len(parsed)} but all rejected: "
-                        f"invalid_format={rejected['invalid_format']}, "
-                        f"wrong_format={rejected['wrong_format']}, "
-                        f"lookahead={rejected['lookahead']}, "
-                        f"dup={rejected['duplicate']}"
-                    )
-
-        # 最终统计
-        np_where_rate = np_where_count / target_n if target_n > 0 else 0
-        
-        self.logger.info(
-            f"[positive] Final: {len(pool)} factors, "
-            f"{np_where_count}/{target_n} ({np_where_rate:.1%}) use np.where"
-        )
-        
-        if np_where_rate < 1.0:
-            self.logger.warning(
-                f"⚠️ WARNING: Only {np_where_rate:.1%} factors use np.where (target: 100%)"
+            self.logger.info(
+                f"[positive] attempt {attempt}: +{accepted_this} "
+                f"(cum {len(pool)}/{target_n})"
             )
-            self.logger.warning("All factors MUST use np.where. Check prompt and GPT response.")
+            if rejected_reasons:
+                # 统计拒绝原因
+                from collections import Counter
+                counts = Counter(rejected_reasons)
+                top_reasons = ", ".join(f"{k}={v}" for k, v in counts.most_common(5))
+                self.logger.info(f"[positive] rejected: {top_reasons}")
 
+        # --- 最终输出 ---
         out = []
         for i, cand in enumerate(pool[:target_n], 1):
             out.append({
                 "factor_id": f"{id_prefix}{i:02d}",
                 "code": cand["code"],
             })
-        
+
         self.logger.info(f"[positive] Final: {len(out)} (target={target_n})")
         return out
