@@ -19,6 +19,7 @@ import re
 import logging
 import os
 import sys
+import math
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
@@ -67,6 +68,42 @@ def _ensure_dir(p: Path) -> None:
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
+# ==================== 统一因子分配函数 ==================== #
+def allocate_factors(N: int, scheme: str = "A") -> Tuple[int, int, int]:
+    """
+    统一因子分配（不区分因子数量，固定比例）
+    
+    Scheme A: top 35% + middle 30% + bottom 35%（全部带报告）
+    Scheme C: top 35% + bottom 35%（丢弃中间 30%，无 middle）
+    
+    两种方案的 top 和 bottom 选取完全一致，便于消融实验对比。
+    
+    Args:
+        N: 总因子数量
+        scheme: "A" 或 "C"
+    
+    Returns:
+        (top_k, middle_k, bottom_k)
+    """
+    top_k = round(N * 0.35)
+    bottom_k = round(N * 0.35)
+    
+    # 确保 top_k 和 bottom_k 至少为 1（N 极小时）
+    top_k = max(1, top_k)
+    bottom_k = max(1, bottom_k)
+    
+    # 防止 top + bottom 超过 N
+    if top_k + bottom_k > N:
+        top_k = math.ceil(N / 2)
+        bottom_k = N - top_k
+    
+    if scheme.upper() == "C":
+        middle_k = 0  # 丢弃中间 30%
+    else:  # Scheme A
+        middle_k = N - top_k - bottom_k
+    
+    return top_k, middle_k, bottom_k
+
 
 # ========================================================================
 # 主类：PositiveAgents（注意复数）
@@ -106,11 +143,12 @@ class PositiveAgents:  # ← 类名改为复数
         self.max_code_len = int(_cfg_get('MAX_CODE_LEN', 1500))
         self.forbidden_tokens = ['import', 'def ', 'class ', 'for ', 'while ', 'eval(', 'exec(']
         self.lookahead_tokens = ['shift(-', 'lead(', 'future']
-        self.blacklist_words = ['price', 'volume', 'high', 'low']
         
         # 生成参数
         self.refill_max_attempts = 3
         self.batch_size = 5
+
+        self.allocation_scheme = str(_cfg_get('ALLOCATION_SCHEME', 'A')).upper()
 
     # ================= 对外接口（iterator 调用）=================
     def generate_factors(
@@ -227,15 +265,22 @@ class PositiveAgents:  # ← 类名改为复数
         positives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'positive']
         negatives = [p for p in prev_pairs_with_score if p.get('memory_type') == 'negative']
 
-        # Scheme A: top 35% / middle 30% / bottom replaced by negatives
-        n_pos = len(positives)
-        top_k = max(1, int(round(n_pos * 0.35))) if n_pos > 0 else 0
-        bottom_k = max(1, int(round(n_pos * 0.35))) if n_pos > 0 else 0
-
+        # v2: top-4, middle-3, bottom-0, negative-3
+        N_pos = len(positives)
+        top_k, middle_k, _ = allocate_factors(N_pos, self.allocation_scheme)
+        bottom_k = 0  # negative 实验不用 bottom，负样本由外部传入
+        
         top_factors = positives[:top_k] if positives else []
-        middle_factors = positives[top_k:n_pos - bottom_k] if n_pos > (top_k + bottom_k) else []
-        bottom_factors = []  # Scheme A negative: bottom 由 GPT 负样本替代
-        negative_factors = negatives  # 数量由 config.NEGATIVE_SAMPLES_COUNT 控制
+        
+        # middle: 从 top_k 之后取 middle_k 个
+        middle_start = top_k
+        middle_end = min(top_k + middle_k, len(positives))
+        middle_factors = positives[middle_start:middle_end] if len(positives) > middle_start else []
+        
+        bottom_factors = []  # bottom_k=0，不展示
+        
+        # 负样本单独处理（作为反面教材）
+        negative_factors = negatives  # 数量已由 iterator 控制，不再硬编码
 
         prev_pairs = prev_pairs_with_score
 
@@ -377,30 +422,21 @@ class PositiveAgents:  # ← 类名改为复数
             "- Use ONLY allowed columns. Handle zero-divisions with np.where.\n"
             "- Avoid future/lead/shift(-k); no loops/imports/functions.\n"
             "- Keep code ≤ 240 chars.\n\n"
-            "**CRITICAL - AVOID NUMPY ARRAY METHODS:**\n"
-            "- NEVER write: np.where(...).rank() or np.where(...).rolling() or np.where(...).pct_change()\n"
-            "- np.where() returns a numpy array, which does NOT have .rank(), .rolling(), .shift(), .pct_change() methods\n"
-            "- If you need these transformations, apply them BEFORE np.where or on pandas Series directly:\n"
-            "  ✓ CORRECT: (data['col1']/data['col2']).rolling(4).mean()\n"
-            "  ✗ WRONG: np.where(data['col']==0, 0, expr).rank()\n\n"
         )
-        
         
         # ========== 历史因子展示 ========== #
         history_block = ""
 
         use_top = top_factors if top_factors else []
         use_bottom = bottom_factors if bottom_factors else []
-        use_middle = middle_factors if middle_factors else []
         use_negative = negative_factors if negative_factors else []
 
         # Fallback 到原逻辑
         if not use_top and not use_bottom and prev_pairs:
             n = len(prev_pairs)
-            top_n = max(1, int(round(n * 0.35)))
-            bottom_n = max(1, int(round(n * 0.35)))
+            top_n = max(1, min(3, n // 3))
+            bottom_n = max(1, min(2, n // 3))
             use_top = prev_pairs[:top_n]
-            use_middle = prev_pairs[top_n:n - bottom_n]
             use_bottom = prev_pairs[-bottom_n:] if n > bottom_n else []
 
         # ========== Top 因子（学习对象）========== #
@@ -420,6 +456,7 @@ class PositiveAgents:  # ← 类名改为复数
                 history_block += "\n"
 
         # ========== Middle 因子（参考对象）========== #
+        use_middle = middle_factors if middle_factors else []
         if use_middle:
             history_block += "=== MIDDLE-PERFORMING FACTORS (Reference - room for improvement) ===\n\n"
             for i, p in enumerate(use_middle, 1):
@@ -431,8 +468,7 @@ class PositiveAgents:  # ← 类名改为复数
                 history_block += f"```python\n{code}\n```\n"
                 if report:
                     # 简短摘要
-                    summary = report[:150].strip()
-                    history_block += f"→ Analysis: {summary}...\n"
+                    history_block += f"Analysis:\n{report[:400]}\n"
                 history_block += "\n"
 
         # ========== Bottom 因子（避免错误）========== #
@@ -481,42 +517,6 @@ class PositiveAgents:  # ← 类名改为复数
             "- Apply proper normalization\n" +
             "- Ensure adequate data coverage (avoid excessive NaN)\n\n" 
         )
-     
-    # ========== 修改 2: 添加新的检测函数 ========== #
-    def _check_numpy_array_methods(self, code: str, rejected: List[str]) -> bool:
-        """
-        检测是否在 numpy array 上调用 pandas 方法
-        
-        改进版本：正确处理嵌套括号
-        
-        常见错误模式:
-        - np.where(...).rank()
-        - np.where(...).rolling()
-        - np.where(...).pct_change()
-        - np.where(...).shift()
-        """
-        import re
-        
-        # 改进的检测方法：不依赖于匹配完整的括号结构
-        # 而是检测 np.where 后面是否出现了 ).method( 模式
-        if 'np.where' in code:
-            # 找到所有 np.where 的位置
-            for match in re.finditer(r'np\.where', code, re.IGNORECASE):
-                start = match.start()
-                # 查看后续 200 个字符（足够覆盖一个 np.where 调用）
-                snippet = code[start:start+200]
-                
-                # 检测是否有 ).method( 模式
-                # 这表示在某个括号表达式的结果上调用了方法
-                method_pattern = r'\)\s*\.\s*(rank|rolling|pct_change|shift|diff|resample|cumsum|cumprod)\s*\('
-                if re.search(method_pattern, snippet, re.IGNORECASE):
-                    # 找到了 np.where...后面跟着的 pandas 方法调用
-                    match_obj = re.search(method_pattern, snippet, re.IGNORECASE)
-                    if match_obj:
-                        rejected.append(f"numpy_array_method:{match_obj.group(0)[:50]}")
-                        return False
-        
-        return True
 
     def _build_refill_prompt(
         self, 
@@ -617,62 +617,39 @@ class PositiveAgents:  # ← 类名改为复数
 
     # ================= 代码清洗与校验 =================
     def _force_single_assignment(self, code: str) -> str:
-        """强制重写为单语句（改进版 - 处理 JSON 污染）"""
+        """强制重写为单语句"""
         if not isinstance(code, str):
             return ""
         s = code.strip()
         s = self._preclean_json_text(s)
         
-        # ===== 新增：清理可能混入的 JSON 片段 ===== #
-        # 如果代码中包含 "},{"，说明混入了多个 JSON 对象
-        if '"},{"' in s or '\"},{"' in s:
-            # 只取第一个完整的赋值语句
-            # 在 data['factor_score'] = ... 之后，遇到 "},{ 就停止
-            json_marker_pos = s.find('"},{"')
-            if json_marker_pos == -1:
-                json_marker_pos = s.find('\"},{"')
-            if json_marker_pos != -1:
-                s = s[:json_marker_pos].strip()
-        
-        # 提取赋值语句的右侧
         m = re.search(r"data\[['\"]factor_score['\"]\]\s*=\s*(.+)", s, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return ""
         rhs = m.group(1).strip()
         
-        # ===== 新增：更激进地清理尾部的 JSON 污染 ===== #
-        # 移除末尾的 "},{... 或 "}... 等 JSON 片段
-        for json_end in ['"}', '"},{', '\"},', '\"},{']:
-            if json_end in rhs:
-                pos = rhs.find(json_end)
-                rhs = rhs[:pos].strip()
-        
-        # 处理多行代码（只取第一条语句）
+        # 处理多行（只取第一条）
         for sep in [";", "\n", "\r"]:
             p = rhs.find(sep)
             if p != -1:
                 rhs = rhs[:p].strip()
                 break
         
-        # 如果是 JSON 对象，拒绝
         if rhs.startswith("{"):
             return ""
         
-        # 检查是否已经是完整的 pd.Series(...).replace(...).fillna(...) 格式
+        # 检查是否已经是完整格式
         if (rhs.startswith("pd.Series(") and 
             ".replace([np.inf,-np.inf],np.nan)" in rhs and 
             ".fillna(0)" in rhs):
-            # 已经是完整格式，直接返回
             return f"data['factor_score']={rhs}"
         
-        # 否则才包装
+        # 包装
         return (
             "data['factor_score']=pd.Series("
             f"{rhs}"
             ",index=data.index).replace([np.inf,-np.inf],np.nan).fillna(0)"
         )
-
-
 
     def _all_columns_allowed(self, code: str, rejected: List[str]) -> bool:
         """检查列名是否在白名单"""
@@ -685,7 +662,8 @@ class PositiveAgents:  # ← 类名改为复数
                 return False
         return True
 
-    def _forbidden_scan(self, code: str, rejected: List[str]) -> bool:  # ← 5个空格，应该是4个
+    def _forbidden_scan(self, code: str, rejected: List[str]) -> bool:
+        """扫描禁用词"""
         low = code.lower()
         for tok in self.forbidden_tokens:
             if tok in low:
@@ -694,23 +672,6 @@ class PositiveAgents:  # ← 类名改为复数
         for tok in self.lookahead_tokens:
             if tok in low:
                 rejected.append(f"lookahead:{tok.strip()}")
-                return False
-        for w in self.blacklist_words:
-            if w in low:
-                rejected.append(f"keyword:{w}")
-        return True
-
-
-      
-    def _no_bare_column_refs(self, code: str, rejected: List[str]) -> bool:
-        """要求所有列访问都写成 data['col']"""
-        if not self.field_whitelist:
-            return True
-        s = code
-        for col in self.field_whitelist:
-            pattern = r"(?<!data\[['\"])\b" + re.escape(col) + r"\b"
-            if re.search(pattern, s):
-                rejected.append(f"bare_column:{col}")
                 return False
         return True
 
@@ -726,11 +687,7 @@ class PositiveAgents:  # ← 类名改为复数
             return None
 
         c = single.strip()
-        if not self._check_numpy_array_methods(c, rejected):
-            return None
         if not self._forbidden_scan(c, rejected):
-            return None
-        if not self._no_bare_column_refs(c, rejected):
             return None
         if "data['factor_score']" not in c or "=" not in c:
             rejected.append("missing_assignment")
