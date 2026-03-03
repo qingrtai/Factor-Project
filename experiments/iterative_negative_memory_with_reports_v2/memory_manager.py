@@ -6,7 +6,7 @@ FIXED VERSION:
 1. Added periods_per_year configuration reading
 2. Use self.periods_per_year in batch_evaluate() call
 3. Simplified memory strategy (100% baseline -> 100% previous round)
-4. FIXED: 按 val_score 筛选 Top10（而非 train_score），避免过拟合
+4. FIXED: 按 val_score 筛选 所有因子（而非 train_score），避免过拟合
 """
 
 import os
@@ -107,15 +107,15 @@ class MemoryManager:
             
             # ========== FIXED: 按 val_score 排序 ========== #
             df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
-            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(10)
+            df = df.sort_values("val_score", ascending=False, na_position="last")
             # ============================================== #
             
-            positives = top10.to_dict(orient="records")
+            positives = df.to_dict(orient="records")
             
             self.logger.info(
                 f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本 (按 val_score 筛选)"
             )
-            if len(top10) > 0:
+            if len(df) > 0:
                 val_range = f"[{top10['val_score'].min():.4f}, {top10['val_score'].max():.4f}]"
                 self.logger.info(f"  - Val score 范围: {val_range}")
             
@@ -137,13 +137,13 @@ class MemoryManager:
             
             # ========== FIXED: 按 val_score 排序 ========== #
             prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
-            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(10)
+            prev_df = prev_df.sort_values("val_score", ascending=False, na_position="last")
             # ============================================== #
             
         except Exception as e:
             raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
         
-        positives = top10.to_dict(orient="records")
+        positives = prev_df.to_dict(orient="records")
         
         self.logger.info(
             f"[memory] Round {round_num} 使用 100% round {round_num-1}: {len(positives)} 个正样本 (按 val_score 筛选)"
