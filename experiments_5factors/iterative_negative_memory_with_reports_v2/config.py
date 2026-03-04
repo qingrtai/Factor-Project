@@ -26,7 +26,7 @@ FACTOR_GENERATION_MAX_TOKENS = 1800
 # "A" = 有 middle（全部带报告）: top 35% + middle 30% + negative 35%
 # "C" = 无 middle（丢弃中间 30%）: top 35% + negative 35%
 # negative 数量与 baseline 实验的 bottom 数量一致，确保对照干净
-ALLOCATION_SCHEME = "A"
+ALLOCATION_SCHEME = "C"
 
 # =============================================================================
 # 路径配置
