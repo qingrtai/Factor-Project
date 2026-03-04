@@ -16,12 +16,13 @@ import pandas as pd
 # 本地模块
 from .config import (
     FACTORS_PER_ROUND,
-    NEGATIVE_SAMPLES_COUNT,
+    ALLOCATION_SCHEME,       # ← 新增
     MAX_GENERATION_ATTEMPTS,
 )
 from .memory_manager import MemoryManager
 from .positive_agents_reports import PositiveAgents
 from .aggregator_reports import ResultsAggregator  # ← 新增
+from .positive_agents_reports import allocate_factors  # ← 新增
 
 # 核心模块
 from core.factor_evaluator import batch_evaluate
@@ -51,7 +52,7 @@ class FactorIterator:
         
         # 配置参数
         self.factors_per_round = FACTORS_PER_ROUND
-        self.negative_count = NEGATIVE_SAMPLES_COUNT
+        self.allocation_scheme = ALLOCATION_SCHEME
         self.max_attempts = MAX_GENERATION_ATTEMPTS
 
         # __init__ 中添加（第 52-54 行）
@@ -66,7 +67,8 @@ class FactorIterator:
         
         self.logger.info("[iterator] Initialized (WITH REPORTS)")
         self.logger.info(f"  - Factors per round: {self.factors_per_round}")
-        self.logger.info(f"  - Negative samples: {self.negative_count}")
+        self.logger.info(f"  - Allocation scheme: {self.allocation_scheme}")
+
     
     # ========== 主流程 ========== #
     
@@ -87,10 +89,16 @@ class FactorIterator:
                 raise ValueError(f"Round {round_num}: 无法加载上一轮记忆")
             
             # Step 2: 生成负样本（代码 + 报告）
-            self.logger.info(f"[Round {round_num}] Step 2: 生成 {self.negative_count} 个负样本")
+            # 改为：
+            N_pos = len(positives)
+            _, _, negative_k = allocate_factors(N_pos, self.allocation_scheme)
+            self.logger.info(
+                f"[Round {round_num}] Step 2: 生成 {negative_k} 个负样本 "
+                f"(Scheme {self.allocation_scheme}, N_pos={N_pos})"
+            )
             negatives = self.memory_manager.get_worst_factors_with_reports(
                 round_num=round_num,
-                n=self.negative_count,
+                n=negative_k,
                 positives_for_context=positives
             )
             
