@@ -22,7 +22,7 @@ GENERATION_TEMPERATURE = 0.8  # 新增：生成因子时的温度
 # === 因子分配方案（新增）===
 # "A" = 有 middle（全部带报告）: top 35% + middle 30% + bottom 35%
 # "C" = 无 middle（丢弃中间 30%）: top 35% + bottom 35%
-ALLOCATION_SCHEME = "A"
+ALLOCATION_SCHEME = "C"
 
 # === 报告策略（新增）===
 TOP_K_DETAILED = 3  # 前 K 个生成详细报告
