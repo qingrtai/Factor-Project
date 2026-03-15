@@ -20,6 +20,8 @@ MAX_ROUNDS = 3                    # 最大迭代轮次
 MIN_ROUNDS = 3                    # 最少运行轮次（强制跑满）
 FACTORS_PER_ROUND = 10            # 每轮生成因子数
 NEGATIVE_SAMPLES_RATIO = 0.35
+TOP_RATIO = 0.35                  # 新增：Top 层比例
+MIDDLE_RATIO = 0.30               # 新增：Middle 层比例
 MAX_GENERATION_ATTEMPTS = 12      # 增加尝试次数（原 10 → 12）
 
 # =============================================================================
@@ -113,6 +115,9 @@ CONFIG = {
     "EARLY_STOPPING_PATIENCE": EARLY_STOPPING_PATIENCE,
     "MIN_DELTA": MIN_DELTA,
     "VAL_SCORE_THRESHOLD": VAL_SCORE_THRESHOLD,
+
+    "TOP_RATIO": TOP_RATIO,
+    "MIDDLE_RATIO": MIDDLE_RATIO,
 }
 
 # =============================================================================
