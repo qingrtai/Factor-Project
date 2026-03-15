@@ -15,9 +15,12 @@ from typing import List, Dict, Optional, Any
 import pandas as pd
 import numpy as np
 
+
 from .config import (
     RESULTS_DIR,
     BASELINE_FILE,
+    TOP_RATIO,        # 新增
+    MIDDLE_RATIO,     # 新增
 )
 
 from shared.config_loader import load_global_config
@@ -31,6 +34,11 @@ logger = logging.getLogger(__name__)
 class MemoryManager:
     """
     记忆管理器（更保守的混合策略）
+    
+    关键改进：
+    - Round 1: 100% baseline （避免过早混合）
+    - Round 2: 80% baseline + 20% round 1
+    - Round 3+: 70% baseline + 30% previous
     """
 
     def __init__(self):
@@ -55,72 +63,51 @@ class MemoryManager:
         
         self.neg_agent = NegativeAgent(logger=self.logger)
 
-    def get_memory_for_round(self, round_num: int) -> List[Dict]:
+    def _allocate_factors(self, df: pd.DataFrame, source_label: str) -> List[Dict]:
         """
-        返回本轮的正样本记忆（简化策略）
-        
-        策略：
-        - Round 1: 100% baseline (Top 10)
-        - Round 2+: 100% previous round (Top 10)
+        按比例分层：Top 35% + Middle 30%，Bottom 35% 丢弃
+        每条记录带 tier 标签
         """
-        # ========== Round 1: 100% baseline ========== #
-        if round_num == 1:
-            csv_path = BASELINE_FILE
-            
-            if not os.path.exists(csv_path):
-                raise FileNotFoundError(f"Baseline not found: {csv_path}")
-            
-            df = pd.read_csv(csv_path)
-            df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
-            top10 = df.sort_values("val_score", ascending=False, na_position="last").head(20)
-
-            # 同时要求 val_score > 0 AND train_score > 0
-            df["train_score"] = pd.to_numeric(df["train_score"], errors="coerce")
-            top10 = top10[(top10["val_score"] > 0) & (top10["train_score"] > 0)]
-            if len(top10) == 0:
-                top10 = df.sort_values("val_score", ascending=False, na_position="last").head(5)
-            positives = top10.to_dict(orient="records")
-                        
-            self.logger.info(
-                f"[memory] Round {round_num} 使用 100% baseline: {len(positives)} 个正样本"
-            )
-            if len(top10) > 0:
-                val_range = f"[{top10['val_score'].min():.4f}, {top10['val_score'].max():.4f}]"
-                self.logger.info(f"  - Val score 范围: {val_range}")
-            
-            return positives
+        df = df.copy()
+        df["val_score"] = pd.to_numeric(df["val_score"], errors="coerce")
+        df = df.sort_values("val_score", ascending=False, na_position="last").reset_index(drop=True)
         
-        # ========== Round 2+: 100% previous round ========== #
-        prev_path = os.path.join(RESULTS_DIR, f"round_{round_num-1}_factor_metrics.csv")
+        n = len(df)
+        n_top = max(1, int(n * TOP_RATIO))
+        n_middle = max(1, int(n * MIDDLE_RATIO))
         
-        if not os.path.exists(prev_path):
-            raise FileNotFoundError(f"Round {round_num}: 上一轮结果不存在: {prev_path}")
+        top_df = df.iloc[:n_top]
+        middle_df = df.iloc[n_top:n_top + n_middle]
+        # bottom = df.iloc[n_top + n_middle:]  ← 丢弃
         
-        try:
-            prev_df = pd.read_csv(prev_path)
-            prev_df["val_score"] = pd.to_numeric(prev_df["val_score"], errors="coerce")
-            top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(20)
-            # 同时要求 val_score > 0 AND train_score > 0
-            prev_df["train_score"] = pd.to_numeric(prev_df["train_score"], errors="coerce")
-            top10 = top10[(top10["val_score"] > 0) & (top10["train_score"] > 0)]
-            if len(top10) == 0:
-                top10 = prev_df.sort_values("val_score", ascending=False, na_position="last").head(5)
-        except Exception as e:
-            raise ValueError(f"Round {round_num}: 读取上一轮失败: {e}")
-        
-        positives = top10.to_dict(orient="records")
+        records = []
+        for _, row in top_df.iterrows():
+            records.append({**row.to_dict(), "tier": "top"})
+        for _, row in middle_df.iterrows():
+            records.append({**row.to_dict(), "tier": "middle"})
         
         self.logger.info(
-            f"[memory] Round {round_num} 使用 100% round {round_num-1}: {len(positives)} 个正样本"
+            f"[memory] {source_label}: {n} 总因子 → "
+            f"top={len(top_df)}, middle={len(middle_df)}, "
+            f"bottom={n - n_top - n_middle}(丢弃)"
         )
         
-        if len(positives) > 0:
-            val_scores = [float(p.get("val_score", 0)) for p in positives]
-            val_range = f"[{min(val_scores):.4f}, {max(val_scores):.4f}]"
-            self.logger.info(f"  - Val score 范围: {val_range}")
-            self.logger.info(f"  - Val score 均值: {np.mean(val_scores):.4f}")
+        return records
+
+    def get_memory_for_round(self, round_num: int) -> List[Dict]:
+        # Round 1: baseline
+        if round_num == 1:
+            if not os.path.exists(BASELINE_FILE):
+                raise FileNotFoundError(f"Baseline not found: {BASELINE_FILE}")
+            df = pd.read_csv(BASELINE_FILE)
+            return self._allocate_factors(df, source_label=f"Round {round_num} (baseline)")
         
-        return positives    
+        # Round 2+: previous round
+        prev_path = os.path.join(RESULTS_DIR, f"round_{round_num-1}_factor_metrics.csv")
+        if not os.path.exists(prev_path):
+            raise FileNotFoundError(f"Round {round_num}: 上一轮结果不存在: {prev_path}")
+        df = pd.read_csv(prev_path)
+        return self._allocate_factors(df, source_label=f"Round {round_num} (round {round_num-1})")
 
     def get_worst_factors_for_negative_generation(
         self,
@@ -184,15 +171,15 @@ class MemoryManager:
         return negatives[:n]
 
     def combine_memory(self, positives: List[Dict], negatives: List[Dict]) -> List[Dict]:
-        """合并正负样本记忆"""
         memory = []
         
         for r in positives:
             memory.append({
                 "code": r.get("code", ""),
                 "train_score": float(r.get("train_score", 0.0) or 0.0),
-                "val_score": float(r.get("val_score", 0.0) or 0.0),  # 添加 val_score
+                "val_score": float(r.get("val_score", 0.0) or 0.0),
                 "memory_type": "positive",
+                "tier": r.get("tier", "top"),       # 新增：保留 tier
             })
         
         for r in negatives:
@@ -200,15 +187,21 @@ class MemoryManager:
                 "code": r.get("code", ""),
                 "train_score": float(r.get("train_score", 0.0) or 0.0),
                 "memory_type": "negative",
+                "tier": "negative",                  # 新增：负样本 tier
             })
         
+        # 更新日志
+        n_top = sum(1 for m in memory if m["tier"] == "top")
+        n_mid = sum(1 for m in memory if m["tier"] == "middle")
+        n_neg = sum(1 for m in memory if m["tier"] == "negative")
+        
         self.logger.info(
-            f"[memory] 合并记忆: {len(positives)} 正样本 + {len(negatives)} 负样本 "
-            f"= {len(memory)} 总记忆"
+            f"[memory] 合并记忆: top={n_top}, middle={n_mid}, negative={n_neg}, "
+            f"总计={len(memory)}"
         )
         
         return memory
-
+    
     def save_round_results(self, evaluated_factors: List[Dict], round_num: int) -> str:
         """保存本轮评估结果"""
         path = os.path.join(RESULTS_DIR, f"round_{round_num}_factor_metrics.csv")
