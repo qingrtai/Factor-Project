@@ -4,11 +4,17 @@ scripts/rankic_evaluator.py
 对已有的 factor_metrics CSV 补算 RankIC / RankICIR 指标。
 
 用法：
+    # 单个文件
     python scripts/rankic_evaluator.py \
-        --input  experiments/iterative_baseline_with_reports/results/round_2_factor_metrics.csv \
-        --output experiments/iterative_baseline_with_reports/results/round_2_rankic.csv
+        --input  experiments/.../round_2_factor_metrics.csv \
+        --output results/round_2_rankic.csv
 
-    # 批量处理某个实验所有轮次：
+    # 多个文件（一次加载数据，批量处理）
+    python scripts/rankic_evaluator.py \
+        --input  round_1_factor_metrics.csv round_2_factor_metrics.csv round_3_factor_metrics.csv \
+        --output results/all_rankic.csv
+
+    # 目录模式（自动匹配 *factor_metrics*.csv）
     python scripts/rankic_evaluator.py \
         --input  experiments/iterative_baseline_with_reports/results/ \
         --output experiments/iterative_baseline_with_reports/results/all_rankic.csv
@@ -217,17 +223,43 @@ def evaluate_factors(input_csv: str, splits: dict) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
+def _resolve_csv_files(input_paths: list[str]) -> list[str]:
+    """
+    将 --input 参数解析为 CSV 文件列表。
+    支持三种模式：
+      1. 单个目录 → glob *factor_metrics*.csv
+      2. 多个文件 → 直接使用
+      3. 单个文件 → 直接使用
+    """
+    # 如果只传了一个参数且是目录 → 目录模式
+    if len(input_paths) == 1 and os.path.isdir(input_paths[0]):
+        csv_files = sorted(glob.glob(os.path.join(input_paths[0], "*factor_metrics*.csv")))
+        print(f"\n[2/3] 目录模式：发现 {len(csv_files)} 个 factor_metrics 文件")
+        return csv_files
+
+    # 否则视为显式文件列表
+    csv_files = []
+    for p in input_paths:
+        if not os.path.isfile(p):
+            print(f"  ⚠ 跳过不存在的文件: {p}")
+            continue
+        csv_files.append(p)
+
+    print(f"\n[2/3] 文件模式：共 {len(csv_files)} 个 CSV")
+    return csv_files
+
+
 def main():
     parser = argparse.ArgumentParser(description="补算 RankIC / RankICIR 指标")
-    parser.add_argument("--input", "-i", required=True,
-                        help="factor_metrics CSV 文件路径，或包含多个 CSV 的目录")
+    parser.add_argument("--input", "-i", required=True, nargs="+",
+                        help="一个或多个 factor_metrics CSV 文件，或一个目录")
     parser.add_argument("--output", "-o", required=True,
                         help="输出 CSV 路径")
     parser.add_argument("--data", "-d", default=RAW_FILE,
                         help=f"原始数据文件路径 (默认: {RAW_FILE})")
     args = parser.parse_args()
 
-    # 1) 加载数据
+    # 1) 加载数据 —— 只加载一次
     print(f"[1/3] 加载数据: {args.data}")
     splits = load_splits(
         raw_csv=args.data,
@@ -240,15 +272,14 @@ def main():
           f"Val: {len(splits['val']):,} rows | "
           f"Test: {len(splits['test']):,} rows")
 
-    # 2) 收集输入文件
-    if os.path.isdir(args.input):
-        csv_files = sorted(glob.glob(os.path.join(args.input, "*factor_metrics*.csv")))
-        print(f"\n[2/3] 发现 {len(csv_files)} 个 factor_metrics 文件")
-    else:
-        csv_files = [args.input]
-        print(f"\n[2/3] 处理单个文件: {args.input}")
+    # 2) 解析输入文件
+    csv_files = _resolve_csv_files(args.input)
 
-    # 3) 逐文件计算
+    if not csv_files:
+        print("没有找到任何 CSV 文件，退出。")
+        sys.exit(1)
+
+    # 3) 逐文件计算（数据已加载，不再重复读取）
     all_results = []
     for csv_path in csv_files:
         round_name = os.path.basename(csv_path).replace("_factor_metrics.csv", "")
