@@ -161,6 +161,43 @@ def _determine_sign(train_data: pd.DataFrame, factor: pd.Series) -> float:
 
 
 # ══════════════════════════════════════════════════════════
+# 均值汇总行
+# ══════════════════════════════════════════════════════════
+def _append_mean_row(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    在 DataFrame 末尾追加一行均值汇总。
+    - 仅对 success 的因子计算均值
+    - 数值列取 mean，非数值列留空
+    - factor_id 标记为 "MEAN"
+    """
+    success = df[df["status"] == "success"] if "status" in df.columns else df
+
+    mean_row = {}
+    for col in df.columns:
+        if col == "factor_id":
+            mean_row[col] = "MEAN"
+        elif col == "source_file":
+            mean_row[col] = "--- MEAN ---"
+        elif col == "status":
+            mean_row[col] = f"mean of {len(success)} factors"
+        elif col in ("code", "fields_used", "factor_report"):
+            mean_row[col] = ""
+        else:
+            # 尝试数值均值
+            if col in success.columns:
+                vals = pd.to_numeric(success[col], errors="coerce")
+                if vals.notna().any():
+                    mean_row[col] = round(float(vals.mean()), 6)
+                else:
+                    mean_row[col] = np.nan
+            else:
+                mean_row[col] = np.nan
+
+    mean_df = pd.DataFrame([mean_row])
+    return pd.concat([df, mean_df], ignore_index=True)
+
+
+# ══════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════
 def evaluate_factors(input_csv: str, splits: dict) -> pd.DataFrame:
@@ -288,27 +325,27 @@ def main():
         df_result.insert(0, "source_file", os.path.basename(csv_path))
         all_results.append(df_result)
 
-    # 4) 合并输出
+    # 4) 合并 & 追加均值汇总行
     df_all = pd.concat(all_results, ignore_index=True)
+    df_all = _append_mean_row(df_all)
+
     df_all.to_csv(args.output, index=False)
     print(f"\n[3/3] 结果已保存: {args.output}")
-    print(f"  共 {len(df_all)} 个因子 | "
-          f"成功 {(df_all['status']=='success').sum()} | "
-          f"失败 {(df_all['status']!='success').sum()}")
+    print(f"  共 {len(df_all) - 1} 个因子 + 1 行均值汇总 | "
+          f"成功 {(df_all['status'].str.startswith('success') if 'status' in df_all.columns else pd.Series()).sum()} | "
+          f"失败 {(df_all['status'].str.startswith('fail') if 'status' in df_all.columns else pd.Series()).sum()}")
 
-    # 打印汇总
-    success = df_all[df_all["status"] == "success"]
-    if not success.empty:
-        print("\n══ 汇总统计 ══")
+    # 打印汇总（从 MEAN 行直接读取）
+    mean_row = df_all[df_all["factor_id"] == "MEAN"]
+    if not mean_row.empty:
+        print("\n══ 均值汇总（最后一行） ══")
         for split in ["train", "val", "test"]:
-            col = f"{split}_RankIC"
-            if col in success.columns:
-                vals = success[col].dropna()
-                if not vals.empty:
-                    print(f"  {split:5s} RankIC: mean={vals.mean():.4f}  "
-                          f"median={vals.median():.4f}  "
-                          f"std={vals.std():.4f}  "
-                          f"[{len(vals)} factors]")
+            ic_col = f"{split}_RankIC"
+            ir_col = f"{split}_RankICIR"
+            if ic_col in mean_row.columns:
+                ic_val = mean_row[ic_col].values[0]
+                ir_val = mean_row[ir_col].values[0] if ir_col in mean_row.columns else np.nan
+                print(f"  {split:5s} RankIC={ic_val:.4f}  RankICIR={ir_val:.4f}")
 
 
 if __name__ == "__main__":
