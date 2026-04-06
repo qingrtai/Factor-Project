@@ -22,6 +22,10 @@ scripts/rankic_evaluator.py
 原理：
     RankIC  = mean of per-period Spearman correlation (factor_score vs next-period ret)
     RankICIR = mean(RankIC) / std(RankIC)
+
+方向判定（v2 修正）：
+    使用训练集 RankIC 符号判定因子方向。若 train_RankIC < 0 则翻转，
+    确保所有因子方向一致，避免正负抵消导致均值被压低。
 """
 from __future__ import annotations
 
@@ -127,37 +131,26 @@ def preprocess_factor(factor_raw: pd.Series) -> pd.Series:
 
 
 # ══════════════════════════════════════════════════════════
-# 方向判定（复用 factor_evaluator 的逻辑）
+# 方向判定（v2：基于训练集 RankIC 符号）
 # ══════════════════════════════════════════════════════════
 def _determine_sign(train_data: pd.DataFrame, factor: pd.Series) -> float:
     """
-    用训练集多空均值判定因子方向：负均值 → sign=-1，否则 +1。
-    与 factor_evaluator.batch_evaluate 的 sign 逻辑一致。
+    用训练集 RankIC 的符号判定因子方向。
+
+    v2 修正：直接计算训练集上的 RankIC 均值，
+    若为负则返回 -1（需翻转），否则返回 +1。
+
+    相比 v1（基于 top10%/bottom10% 多空收益差）：
+    - 与 RankIC 指标本身完全一致，不会出现判定方向与实际 RankIC 符号矛盾的情况
+    - 保证翻转后所有因子的 train_RankIC > 0，避免正负抵消
     """
-    df = pd.DataFrame({
-        "date":   pd.to_datetime(train_data[DATE_COL]),
-        "score":  pd.to_numeric(factor, errors="coerce"),
-        "ret":    pd.to_numeric(train_data[RET_COL], errors="coerce"),
-    }).dropna(subset=["date", "score", "ret"])
+    rankic_list = compute_rankic_series(train_data, factor)
 
-    if df.empty:
+    if not rankic_list:
         return 1.0
 
-    ls_vals = []
-    for _, grp in df.groupby("date", sort=True):
-        s = grp["score"]
-        r = grp["ret"]
-        if s.notna().sum() < 10:
-            continue
-        rnk = s.rank(method="first", pct=True)
-        lo = r[rnk <= 0.10]
-        hi = r[rnk >= 0.90]
-        if len(lo) >= 5 and len(hi) >= 5:
-            ls_vals.append(float(hi.mean() - lo.mean()))
-
-    if not ls_vals:
-        return 1.0
-    return -1.0 if np.mean(ls_vals) < 0 else 1.0
+    mean_rankic = float(np.mean(rankic_list))
+    return -1.0 if mean_rankic < 0 else 1.0
 
 
 # ══════════════════════════════════════════════════════════
@@ -224,7 +217,7 @@ def evaluate_factors(input_csv: str, splits: dict) -> pd.DataFrame:
                 raw_factor = safe_execute(code, splits[split_name])
                 factors_by_split[split_name] = preprocess_factor(raw_factor)
 
-            # 2) 用训练集判定方向
+            # 2) 用训练集 RankIC 符号判定方向（v2 修正）
             sign = _determine_sign(splits["train"], factors_by_split["train"])
             for k in factors_by_split:
                 factors_by_split[k] = factors_by_split[k] * sign
@@ -240,6 +233,7 @@ def evaluate_factors(input_csv: str, splits: dict) -> pd.DataFrame:
                 result[f"{split_name}_RankIC_std"]  = stats["RankIC_std"]
                 result[f"{split_name}_n_periods"]   = stats["n_periods"]
 
+            result["sign"] = int(sign)
             result["status"] = "success"
 
         except Exception as e:
@@ -248,6 +242,7 @@ def evaluate_factors(input_csv: str, splits: dict) -> pd.DataFrame:
                 result[f"{split_name}_RankICIR"]   = np.nan
                 result[f"{split_name}_RankIC_std"]  = np.nan
                 result[f"{split_name}_n_periods"]   = 0
+            result["sign"] = 0
             result["status"] = f"fail: {e}"
 
         results.append(result)
@@ -255,6 +250,7 @@ def evaluate_factors(input_csv: str, splits: dict) -> pd.DataFrame:
               f"train_RankIC={result.get('train_RankIC', 'N/A'):.4f}  "
               f"val_RankIC={result.get('val_RankIC', 'N/A'):.4f}  "
               f"test_RankIC={result.get('test_RankIC', 'N/A'):.4f}  "
+              f"sign={result.get('sign', '?')}  "
               f"[{result['status']}]")
 
     return pd.DataFrame(results)
@@ -287,7 +283,7 @@ def _resolve_csv_files(input_paths: list[str]) -> list[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="补算 RankIC / RankICIR 指标")
+    parser = argparse.ArgumentParser(description="补算 RankIC / RankICIR 指标（v2：基于 RankIC 符号判定方向）")
     parser.add_argument("--input", "-i", required=True, nargs="+",
                         help="一个或多个 factor_metrics CSV 文件，或一个目录")
     parser.add_argument("--output", "-o", required=True,
